@@ -1,0 +1,42 @@
+{
+  "name": "bastion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Firewall Onboarding Assistant — guided, mostly-deterministic firewall baselining over vendor APIs on Cloudflare Workers.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n worker,web -c blue,green \"wrangler dev\" \"vite\"",
+    "dev:worker": "wrangler dev",
+    "dev:web": "vite",
+    "build": "npm run build:web && npm run typecheck",
+    "build:web": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "schema:json": "node --experimental-strip-types scripts/gen-schema.mjs",
+    "deploy": "npm run build:web && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply bastion --local",
+    "db:migrate:remote": "wrangler d1 migrations apply bastion --remote"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.2",
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "postcss": "^8.4.45",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.3",
+    "vitest": "^2.0.5",
+    "wrangler": "^4.0.0",
+    "zod-to-json-schema": "^3.25.2"
+  }
+}

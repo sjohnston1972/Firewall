@@ -1,0 +1,44 @@
+name = "bastion"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# The Worker serves the built SPA from web/ (Vite output) as static assets.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# ---- Durable Objects: one instance per onboarding session ----
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDO"]
+
+# ---- D1: relational store ----
+[[d1_databases]]
+binding = "DB"
+database_name = "bastion"
+# Replace database_id after `wrangler d1 create bastion`
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# ---- R2: object store ----
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "bastion-storage"
+
+[vars]
+# Non-secret config. Secrets (ANTHROPIC_API_KEY) go in .dev.vars locally
+# and `wrangler secret put ANTHROPIC_API_KEY` in production.
+ALLOWED_EMAIL = "stevie.johnston@gmail.com"
+NORMALISER_MODEL = "claude-sonnet-4-6"
+NORMALISER_MODEL_HARD = "claude-opus-4-8"
+ENVIRONMENT = "production"
+
+[observability]
+enabled = true
