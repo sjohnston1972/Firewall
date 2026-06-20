@@ -110,6 +110,7 @@ export interface DiscoveredInterface {
   zone?: string;
   description?: string;
   link?: "up" | "down";
+  hwType?: string;
 }
 
 export interface DiscoveredZone {

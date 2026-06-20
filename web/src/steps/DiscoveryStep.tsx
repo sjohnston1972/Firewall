@@ -128,33 +128,38 @@ function Interfaces({ inv }: { inv: DeviceInventory }) {
   return (
     <div>
       <div className="eyebrow mb-2">Interfaces · {inv.interfaces.length}</div>
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
         {inv.interfaces.map((iface) => (
           <div
             key={iface.name}
-            className="flex items-center justify-between gap-3 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5"
+            title={[
+              iface.name,
+              iface.address,
+              iface.zone && `zone ${iface.zone}`,
+              iface.link && `link ${iface.link}`,
+              iface.hwType,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            className="flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-950 px-2 py-1"
           >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${
-                    iface.link === "down" || !iface.enabled ? "bg-ink-500" : "bg-good"
-                  }`}
-                  aria-hidden
-                />
-                <span className="truncate font-mono text-xs text-slate-100">{iface.name}</span>
-              </div>
-              <div className="mt-0.5 truncate pl-4 font-mono text-[11px] text-ink-500">
-                {iface.address ?? "no address"}
-              </div>
-            </div>
-            {iface.zone ? (
-              <span className="shrink-0 rounded bg-accent-soft/40 px-1.5 py-0.5 font-mono text-[10px] text-accent">
-                {iface.zone}
-              </span>
-            ) : (
-              <span className="shrink-0 font-mono text-[10px] text-ink-600">unzoned</span>
-            )}
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                iface.link === "down" || !iface.enabled ? "bg-ink-500" : "bg-good"
+              }`}
+              aria-hidden
+            />
+            <span className="truncate font-mono text-[11px] text-slate-100">{iface.name}</span>
+            <span className="ml-auto flex min-w-0 items-center gap-1.5">
+              {iface.address && (
+                <span className="truncate font-mono text-[10px] text-ink-500">{iface.address}</span>
+              )}
+              {iface.zone && (
+                <span className="shrink-0 rounded bg-accent-soft/40 px-1 font-mono text-[10px] text-accent">
+                  {iface.zone}
+                </span>
+              )}
+            </span>
           </div>
         ))}
       </div>
