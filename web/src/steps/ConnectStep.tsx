@@ -44,7 +44,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
       : `https://${target.credentials.host}`
     : "https://<mgmt-ip>";
   const relayCmd =
-    `node C:/cloudflare_projects/bastion/agent/relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
+    `node relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
     `${state.sessionId ?? "<session-id>"} --device ${deviceUrl}`;
 
   const connected = state.conn?.ok === true;
@@ -214,12 +214,25 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                     to this session over WSS and forwards API calls to the device — and it can talk
                     to self-signed management certs (which the Worker cannot).
                   </p>
+                  <div className="mt-2">
+                    <a
+                      href="/relay-agent.mjs"
+                      download="relay-agent.mjs"
+                      className="inline-flex items-center gap-1.5 rounded border border-accent/40 bg-accent-soft/30 px-2 py-1 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
+                    >
+                      ↓ Download relay-agent.mjs
+                    </a>
+                    <span className="ml-2 text-[11px] text-ink-500">
+                      (zero dependencies · needs Node 18+)
+                    </span>
+                  </div>
                   <code className="mt-2 block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-2 font-mono text-[11px] text-accent">
                     {relayCmd}
                   </code>
                   <p className="mt-2 text-[11px] text-ink-500">
-                    Then click <span className="text-slate-200">Test connection</span>. The agent is
-                    in <span className="font-mono">agent/relay-agent.mjs</span>.
+                    Save it (e.g. your Downloads folder), run the command from there, wait for{" "}
+                    <span className="font-mono text-slate-200">connected</span>, then click{" "}
+                    <span className="text-slate-200">Test connection</span>.
                   </p>
                 </div>
               )}

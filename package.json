@@ -9,7 +9,7 @@
     "dev:worker": "wrangler dev",
     "dev:web": "vite",
     "build": "npm run build:web && npm run typecheck",
-    "build:web": "vite build",
+    "build:web": "vite build && node scripts/copy-agent.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
