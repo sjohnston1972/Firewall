@@ -106,18 +106,39 @@ export function PlanStep({ state, patch, onNext, onBack, step, total }: StepProp
         </CardBody>
       </Card>
 
-      {plan?.sections.map((s) => (
-        <Card key={s.key}>
-          <CardHeader
-            eyebrow={s.key}
-            title={s.title}
-            action={<SectionCounts s={s} />}
-          />
-          <CardBody>
-            <DiffPanel lines={s.lines} emptyText="No change in this section." />
+      {plan && (
+        <Card>
+          <CardHeader eyebrow="What will change" title="Change set by section" />
+          <CardBody className="space-y-3">
+            {plan.sections.filter((s) => s.added + s.modified + s.removed > 0).length === 0 ? (
+              <p className="text-sm text-ink-500">
+                No differences — the device already matches this plan.
+              </p>
+            ) : (
+              plan.sections
+                .filter((s) => s.added + s.modified + s.removed > 0)
+                .map((s) => (
+                  <div key={s.key}>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-slate-200">{s.title}</span>
+                      <SectionCounts s={s} />
+                    </div>
+                    <DiffPanel lines={s.lines} />
+                  </div>
+                ))
+            )}
+            {plan.sections.some((s) => s.added + s.modified + s.removed === 0) && (
+              <p className="border-t border-ink-800 pt-2 text-[11px] text-ink-500">
+                No change ·{" "}
+                {plan.sections
+                  .filter((s) => s.added + s.modified + s.removed === 0)
+                  .map((s) => s.key)
+                  .join(", ")}
+              </p>
+            )}
           </CardBody>
         </Card>
-      ))}
+      )}
     </StepShell>
   );
 }

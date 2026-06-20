@@ -49,7 +49,7 @@ export function ToggleCard({ title, description, checked, onChange, tag }: Toggl
       onClick={() => onChange(!checked)}
       aria-pressed={checked}
       className={
-        "group flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-all duration-200 " +
+        "group flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all duration-200 " +
         (checked
           ? "border-accent bg-accent-soft/40 shadow-[0_0_0_1px_rgba(79,156,249,0.55),0_0_24px_-6px_rgba(79,156,249,0.65)]"
           : "border-ink-700 bg-ink-900/50 hover:border-ink-600 hover:bg-ink-800/50")
@@ -60,7 +60,7 @@ export function ToggleCard({ title, description, checked, onChange, tag }: Toggl
         <span className="flex items-center gap-2">
           <span
             className={
-              "text-sm font-medium transition-colors " +
+              "text-[13px] font-medium transition-colors " +
               (checked ? "text-accent" : "text-slate-100")
             }
           >
@@ -72,7 +72,7 @@ export function ToggleCard({ title, description, checked, onChange, tag }: Toggl
             </span>
           )}
         </span>
-        <span className="mt-1 block text-xs leading-relaxed text-ink-500">
+        <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">
           {description}
         </span>
       </span>

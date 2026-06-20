@@ -105,7 +105,7 @@ export function PacksStep({ state, patch, onNext, onBack, step, total }: StepPro
               <Card key={cat.key}>
                 <CardHeader eyebrow={cat.blurb} title={cat.label} />
                 <CardBody>
-                  <div className="grid gap-2.5 lg:grid-cols-2">
+                  <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
                     {packs.map((p) => (
                       <ToggleCard
                         key={p.id}
