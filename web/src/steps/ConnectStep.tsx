@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { StepProps } from "../App";
 import { api, ApiError } from "../api";
-import { Card, CardBody, CardHeader } from "../components/Card";
+import { Card, CardBody } from "../components/Card";
 import { Field } from "../components/Field";
 import { Button } from "../components/Button";
 import { StatusBadge } from "../components/StatusBadge";
@@ -80,65 +80,55 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
       footerNote={connected ? "Connection verified" : "Test the connection to continue"}
     >
       <Card>
-        <CardHeader
-          eyebrow="Target platform"
-          title="Choose the firewall vendor"
-          description="The driver and the fields below change per platform. Meraki is cloud-managed — it asks for an API key instead of an IP and transport."
-        />
-        <CardBody>
-          <VendorToggle value={target.vendor} onChange={setVendor} disabled={testing} />
-          <p className="mt-3 font-mono text-[11px] text-ink-500">
-            apply model · {vendorMeta.applyModel}
-          </p>
-        </CardBody>
-      </Card>
+        <CardBody className="space-y-4">
+          {/* Vendor */}
+          <div>
+            <div className="mb-2 flex items-baseline justify-between gap-3">
+              <span className="eyebrow">Vendor</span>
+              <span className="font-mono text-[10px] text-ink-500">
+                apply · {vendorMeta.applyModel}
+              </span>
+            </div>
+            <VendorToggle value={target.vendor} onChange={setVendor} disabled={testing} />
+          </div>
 
-      <Card>
-        <CardHeader
-          eyebrow={isMeraki ? "Dashboard credentials" : "Connection"}
-          title={isMeraki ? "Meraki Dashboard API" : "Reach the management plane"}
-          description={
-            isMeraki
-              ? "Bastion talks to the Meraki cloud — no local IP or transport choice."
-              : "Pick how the Worker reaches the device. Credentials live in session memory only and are never logged."
-          }
-        />
-        <CardBody>
           {isMeraki ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                id="apiKey"
-                label="API key"
-                mono
-                type="password"
-                placeholder="••••••••••••••••"
-                value={target.credentials.apiKey ?? ""}
-                onChange={(e) => setCred("apiKey", e.target.value)}
-              />
-              <Field
-                id="orgId"
-                label="Organization ID"
-                mono
-                placeholder="123456"
-                value={target.credentials.orgId ?? ""}
-                onChange={(e) => setCred("orgId", e.target.value)}
-              />
-              <Field
-                id="networkId"
-                label="Network ID"
-                mono
-                placeholder="L_123456789"
-                value={target.credentials.networkId ?? ""}
-                onChange={(e) => setCred("networkId", e.target.value)}
-                className="sm:col-span-2"
-              />
+            <div>
+              <span className="eyebrow mb-2 block">Meraki Dashboard API · cloud-managed</span>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field
+                  id="apiKey"
+                  label="API key"
+                  mono
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={target.credentials.apiKey ?? ""}
+                  onChange={(e) => setCred("apiKey", e.target.value)}
+                />
+                <Field
+                  id="orgId"
+                  label="Organization ID"
+                  mono
+                  placeholder="123456"
+                  value={target.credentials.orgId ?? ""}
+                  onChange={(e) => setCred("orgId", e.target.value)}
+                />
+                <Field
+                  id="networkId"
+                  label="Network ID"
+                  mono
+                  placeholder="L_123456789"
+                  value={target.credentials.networkId ?? ""}
+                  onChange={(e) => setCred("networkId", e.target.value)}
+                />
+              </div>
             </div>
           ) : (
-            <div className="space-y-5">
-              {/* Transport selector */}
+            <>
+              {/* Transport — single compact row */}
               <div>
                 <span className="eyebrow mb-2 block">Transport</span>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {TRANSPORTS.map((t) => {
                     const active = target.transport === t.id;
                     return (
@@ -148,18 +138,18 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                         onClick={() => setTransport(t.id)}
                         aria-pressed={active}
                         className={
-                          "rounded-lg border px-3 py-2.5 text-left transition-all " +
+                          "rounded-lg border px-2.5 py-1.5 text-left transition-all " +
                           (active
                             ? "border-accent bg-accent-soft/40"
                             : "border-ink-700 bg-ink-900/50 hover:border-ink-600")
                         }
                       >
                         <span
-                          className={`block text-sm font-medium ${active ? "text-accent" : "text-slate-200"}`}
+                          className={`block text-[13px] font-medium ${active ? "text-accent" : "text-slate-200"}`}
                         >
                           {t.label}
                         </span>
-                        <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">
+                        <span className="mt-0.5 block text-[10px] leading-tight text-ink-500">
                           {t.blurb}
                         </span>
                       </button>
@@ -168,7 +158,8 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              {/* Credentials — single row */}
+              <div className="grid gap-3 sm:grid-cols-3">
                 <Field
                   id="host"
                   label="Management host / IP"
@@ -177,16 +168,6 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                   value={target.credentials.host ?? ""}
                   onChange={(e) => setCred("host", e.target.value)}
                 />
-                {target.transport === "tunnel" && (
-                  <Field
-                    id="tunnelHostname"
-                    label="Tunnel hostname"
-                    mono
-                    placeholder="fw-mgmt.example.cloudflareaccess.com"
-                    value={target.tunnelHostname ?? ""}
-                    onChange={(e) => patch({ target: { ...target, tunnelHostname: e.target.value } })}
-                  />
-                )}
                 <Field
                   id="username"
                   label="Username"
@@ -206,60 +187,56 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                 />
               </div>
 
+              {target.transport === "tunnel" && (
+                <Field
+                  id="tunnelHostname"
+                  label="Tunnel hostname"
+                  mono
+                  placeholder="fw-mgmt.example.cloudflareaccess.com"
+                  value={target.tunnelHostname ?? ""}
+                  onChange={(e) => patch({ target: { ...target, tunnelHostname: e.target.value } })}
+                />
+              )}
+
               {target.transport === "relay" && (
-                <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-3">
-                  <p className="text-xs font-medium text-slate-200">Run the on-site agent</p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-ink-500">
-                    On a host that can reach the firewall, run the command below. It dials outbound
-                    to this session over WSS and forwards API calls to the device — and it can talk
-                    to self-signed management certs (which the Worker cannot).
-                  </p>
-                  <div className="mt-2">
+                <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-medium text-slate-200">On-site agent:</span>
                     <a
                       href="/relay-agent.mjs"
                       download="relay-agent.mjs"
-                      className="inline-flex items-center gap-1.5 rounded border border-accent/40 bg-accent-soft/30 px-2 py-1 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
+                      className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent-soft/30 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
                     >
-                      ↓ Download relay-agent.mjs
+                      ↓ Download
                     </a>
-                    <span className="ml-2 text-[11px] text-ink-500">
-                      (zero dependencies · needs Node 18+)
+                    <span className="text-[10px] text-ink-500">
+                      run it on a host that reaches the device, then Test.
                     </span>
                   </div>
-                  <code className="mt-2 block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-2 font-mono text-[11px] text-accent">
+                  <code className="mt-1.5 block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-1.5 font-mono text-[10px] text-accent">
                     {relayCmd}
                   </code>
-                  <p className="mt-2 text-[11px] text-ink-500">
-                    Save it (e.g. your Downloads folder), run the command from there, wait for{" "}
-                    <span className="font-mono text-slate-200">connected</span>, then click{" "}
-                    <span className="text-slate-200">Test connection</span>.
-                  </p>
                 </div>
               )}
 
               {target.transport === "container" && (
-                <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-3 text-[11px] leading-relaxed text-ink-500">
-                  <span className="text-slate-200">Cloud proxy</span> spins up a short-lived
-                  Cloudflare container for this session and routes API calls through it. Because the
-                  container is a real runtime, it reaches management planes with{" "}
-                  <span className="text-slate-200">self-signed certificates</span> — no on-site agent
-                  needed. The device just has to be reachable from Cloudflare's network (a public
-                  mgmt IP). The container sleeps automatically when idle.
-                </div>
+                <p className="text-[10px] leading-relaxed text-ink-500">
+                  <span className="text-slate-200">Cloud proxy:</span> a short-lived Cloudflare
+                  container reaches self-signed mgmt planes on a public IP — no agent. Sleeps when
+                  idle.
+                </p>
               )}
 
               {target.transport === "direct" && (
-                <p className="text-[11px] leading-relaxed text-ink-500">
-                  Direct requires a publicly reachable mgmt IP with a{" "}
-                  <span className="text-slate-200">trusted TLS certificate</span>. Devices with
-                  self-signed certs (most firewalls by default) need the Relay agent or a Cloudflare
-                  Tunnel — the Worker cannot bypass certificate verification.
+                <p className="text-[10px] leading-relaxed text-ink-500">
+                  <span className="text-slate-200">Direct</span> needs a public IP with a trusted
+                  cert. Self-signed devices need Cloud proxy or the Relay agent.
                 </p>
               )}
-            </div>
+            </>
           )}
 
-          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-ink-700 pt-5">
+          <div className="flex flex-wrap items-center gap-3 border-t border-ink-700 pt-3">
             <Button variant="primary" onClick={testConnection} loading={testing}>
               Test connection
             </Button>
@@ -268,10 +245,13 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                 {connected ? "authenticated" : "failed"}
               </StatusBadge>
             )}
+            <span className="text-[11px] text-ink-500">
+              Read-only · credentials live in session memory only.
+            </span>
           </div>
 
           {error && (
-            <div className="mt-3 rounded-lg border border-bad/30 bg-bad/5 p-3 text-xs leading-relaxed text-bad">
+            <div className="rounded-lg border border-bad/30 bg-bad/5 p-2.5 text-xs leading-relaxed text-bad">
               {error}
             </div>
           )}
@@ -279,7 +259,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
           {/* Connect-timeout = packets silently dropped, almost always source-IP
               filtering (NSG / mgmt permitted-IPs). Point the user at the relay. */}
           {error && /timeout/i.test(error) && target.transport !== "relay" && (
-            <div className="mt-2 rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs leading-relaxed text-ink-500">
+            <div className="rounded-lg border border-warn/30 bg-warn/5 p-2.5 text-xs leading-relaxed text-ink-500">
               <span className="font-medium text-warn">Looks like a connect timeout.</span> The device
               dropped the connection rather than refusing it — usually the target is{" "}
               <span className="text-slate-200">source-IP filtered</span> (an Azure NSG or the firewall's
@@ -298,7 +278,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
           )}
 
           {connected && (
-            <dl className="mt-4 grid gap-px overflow-hidden rounded-lg border border-ink-700 bg-ink-700 sm:grid-cols-4">
+            <dl className="grid gap-px overflow-hidden rounded-lg border border-ink-700 bg-ink-700 sm:grid-cols-4">
               <ConnFact label="Model" value={state.conn?.model} />
               <ConnFact label="Version" value={state.conn?.version} />
               <ConnFact label="Serial" value={state.conn?.serial} />
@@ -335,7 +315,7 @@ function StepShellLite(props: {
       total={props.total}
       eyebrow="Connect to target"
       title="Connect & authenticate"
-      intro="Every session begins read-only. We test auth, read model and licensing, and open nothing on the device until you confirm a plan later."
+      intro="Read-only: test auth and read model/licensing — nothing is written until you confirm a plan."
       onNext={props.onNext}
       nextDisabled={props.nextDisabled}
       footerNote={props.footerNote}
