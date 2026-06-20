@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StepBar, type StepDef } from "./components/StepBar";
 import { StatusBadge } from "./components/StatusBadge";
+import { api } from "./api";
 import { VENDORS } from "./types";
+import type { SessionSummary } from "./types";
 import type {
   ApplyResult,
   ConnInfo,
@@ -162,6 +164,114 @@ export default function App() {
       conn: null,
     });
 
+  // ---- session save / resume ----
+  const saveTimer = useRef<number | null>(null);
+  const restoring = useRef(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [saved, setSaved] = useState(false);
+
+  const sessionName = useMemo(
+    () => state.design.hostname?.trim() || `${vendorMeta.label} onboarding`,
+    [state.design.hostname, vendorMeta.label],
+  );
+
+  // Remember the active session so a refresh can resume it.
+  useEffect(() => {
+    try {
+      if (state.sessionId) localStorage.setItem("bastion-session", state.sessionId);
+    } catch {
+      /* ignore */
+    }
+  }, [state.sessionId]);
+
+  // Debounced autosave of the whole wizard (state + position) to the backend.
+  useEffect(() => {
+    if (!state.sessionId || restoring.current) return;
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    const id = state.sessionId;
+    saveTimer.current = window.setTimeout(() => {
+      api
+        .saveState(id, { state, current, furthest }, sessionName)
+        .then(() => {
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 1500);
+        })
+        .catch(() => {});
+    }, 800);
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
+  }, [state, current, furthest, sessionName]);
+
+  const loadSession = async (id: string) => {
+    restoring.current = true;
+    setSessionsOpen(false);
+    try {
+      const { wizard } = await api.loadState<{
+        state: WizardState;
+        current: number;
+        furthest: number;
+      }>(id);
+      if (wizard?.state) {
+        setState({ ...wizard.state, sessionId: id });
+        setCurrent(wizard.current ?? 0);
+        setFurthest(wizard.furthest ?? wizard.current ?? 0);
+      } else {
+        setState({ ...initialState(), sessionId: id });
+        setCurrent(0);
+        setFurthest(0);
+      }
+    } catch {
+      /* ignore — leave current state */
+    } finally {
+      window.setTimeout(() => {
+        restoring.current = false;
+      }, 60);
+    }
+  };
+
+  const newSession = () => {
+    restoring.current = true;
+    setSessionsOpen(false);
+    setState(initialState());
+    setCurrent(0);
+    setFurthest(0);
+    try {
+      localStorage.removeItem("bastion-session");
+    } catch {
+      /* ignore */
+    }
+    window.setTimeout(() => {
+      restoring.current = false;
+    }, 60);
+  };
+
+  const openSessions = async () => {
+    const next = !sessionsOpen;
+    setSessionsOpen(next);
+    if (next) {
+      try {
+        const r = await api.listSessions();
+        setSessions(r.sessions);
+      } catch {
+        setSessions([]);
+      }
+    }
+  };
+
+  // On first load, resume the last session if there was one.
+  useEffect(() => {
+    let last: string | null = null;
+    try {
+      last = localStorage.getItem("bastion-session");
+    } catch {
+      /* ignore */
+    }
+    if (last) loadSession(last);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const total = STEPS.length;
   const stepProps = { state, patch, onNext: next, onBack: back, step: current + 1, total };
 
@@ -211,12 +321,76 @@ export default function App() {
               {vendorMeta.label}
             </StatusBadge>
             {state.sessionId ? (
-              <StatusBadge tone="good" dot>
-                session {state.sessionId.slice(0, 8)}
+              <StatusBadge tone={saved ? "good" : "neutral"} dot={saved}>
+                {saved ? "saved" : `session ${state.sessionId.slice(4, 12)}`}
               </StatusBadge>
             ) : (
               <StatusBadge tone="neutral">no session</StatusBadge>
             )}
+
+            {/* Sessions menu */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={openSessions}
+                className="flex h-8 items-center gap-1.5 rounded-md border border-ink-700 bg-ink-900/60 px-2.5 text-xs font-medium text-slate-200 transition-colors hover:border-accent/50 hover:text-accent"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M4 7h16M4 12h16M4 17h16"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                Sessions
+              </button>
+              {sessionsOpen && (
+                <div className="absolute right-0 top-10 z-30 w-80 overflow-hidden rounded-lg border border-ink-700 bg-ink-900 shadow-xl">
+                  <div className="flex items-center justify-between border-b border-ink-800 px-3 py-2">
+                    <span className="eyebrow">Saved sessions</span>
+                    <button
+                      type="button"
+                      onClick={newSession}
+                      className="rounded border border-accent/40 bg-accent-soft/30 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
+                    >
+                      + New
+                    </button>
+                  </div>
+                  <ul className="max-h-80 overflow-y-auto">
+                    {sessions.length === 0 ? (
+                      <li className="px-3 py-4 text-center text-xs text-ink-500">
+                        No saved sessions yet.
+                      </li>
+                    ) : (
+                      sessions.map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onClick={() => loadSession(s.id)}
+                            className={
+                              "flex w-full flex-col items-start gap-0.5 border-b border-ink-800 px-3 py-2 text-left transition-colors hover:bg-ink-800/60 " +
+                              (s.id === state.sessionId ? "bg-accent-soft/20" : "")
+                            }
+                          >
+                            <span className="flex w-full items-center justify-between gap-2">
+                              <span className="truncate text-sm font-medium text-slate-100">
+                                {s.name}
+                              </span>
+                              <span className="eyebrow shrink-0">{s.vendor}</span>
+                            </span>
+                            <span className="font-mono text-[10px] text-ink-500">
+                              {s.status} · {fmtWhen(s.updatedAt)}
+                            </span>
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              )}
+            </div>
+
             <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </div>
@@ -250,6 +424,18 @@ export interface StepProps {
   onBack: () => void;
   step: number;
   total: number;
+}
+
+function fmtWhen(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const diff = Date.now() - t;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return new Date(t).toLocaleDateString();
 }
 
 function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {

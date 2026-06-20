@@ -16,12 +16,12 @@ export default {
           500: "rgb(var(--ink-500) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: "#4f9cf9",
-          soft: "#1e3a5f",
+          DEFAULT: "rgb(var(--accent) / <alpha-value>)",
+          soft: "rgb(var(--accent-soft) / <alpha-value>)",
         },
-        good: "#34d399",
-        warn: "#fbbf24",
-        bad: "#f87171",
+        good: "rgb(var(--good) / <alpha-value>)",
+        warn: "rgb(var(--warn) / <alpha-value>)",
+        bad: "rgb(var(--bad) / <alpha-value>)",
       },
       fontFamily: {
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],

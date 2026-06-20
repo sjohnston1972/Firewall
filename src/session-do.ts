@@ -94,6 +94,8 @@ export class SessionDO {
           return await this.rollback();
         case url.pathname.includes("/report"):
           return await this.report();
+        case url.pathname.includes("/state"):
+          return req.method === "POST" ? await this.saveWizard(body) : await this.loadWizard();
         case url.pathname.includes("/init"):
           return await this.init(body);
         default:
@@ -170,6 +172,24 @@ export class SessionDO {
     this.mem.vendor = vendor;
     await this.persist();
     return json({ ok: true, projectId });
+  }
+
+  /** Persist the frontend wizard state so a session can be resumed later. */
+  private async saveWizard(body: Record<string, unknown>): Promise<Response> {
+    const projectId = this.requireProject();
+    const wizard = body.wizard ?? body;
+    await this.state.storage.put("wizard", wizard);
+    // Keep a friendly name + recency on the project row for the sessions list.
+    const name = typeof body.name === "string" ? body.name : undefined;
+    if (name) await db.renameProject(this.env, projectId, name).catch(() => {});
+    else await db.touchProject(this.env, projectId).catch(() => {});
+    return json({ ok: true });
+  }
+
+  private async loadWizard(): Promise<Response> {
+    this.requireProject();
+    const wizard = (await this.state.storage.get("wizard")) ?? null;
+    return json({ wizard });
   }
 
   private async connect(body: Record<string, unknown>): Promise<Response> {

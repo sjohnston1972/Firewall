@@ -22,6 +22,12 @@
   --fg-100: 241 245 249;
   --fg-200: 226 232 240;
   --fg-300: 203 213 225;
+  /* a bright accent reads well on dark surfaces */
+  --accent: 79 156 249;
+  --accent-soft: 30 58 95;
+  --good: 52 211 153;
+  --warn: 251 191 36;
+  --bad: 248 113 113;
 }
 
 .theme-light {
@@ -38,6 +44,13 @@
   --fg-100: 30 41 59;
   --fg-200: 51 65 85;
   --fg-300: 71 85 105;
+  /* deeper, more saturated accents so they hold up on a white surface */
+  --accent: 37 99 235; /* blue-600 */
+  --accent-soft: 219 234 254; /* blue-100 — pale tint behind accent text */
+  --good: 5 150 105; /* emerald-600 */
+  --warn: 180 83 9; /* amber-700 */
+  --bad: 220 38 38; /* red-600 */
+  --grid-line: rgba(37, 99, 235, 0.05);
 }
 
 /* Re-point the bright foreground utilities at theme-aware variables. Higher

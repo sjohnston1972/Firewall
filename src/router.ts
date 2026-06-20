@@ -57,6 +57,21 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
     return json({ packs: PACKS });
   }
 
+  // ---- GET /api/sessions : list saved onboarding sessions ----
+  if (path === "/api/sessions" && req.method === "GET") {
+    const rows = await db.listProjects(env);
+    return json({
+      sessions: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        vendor: r.vendor,
+        status: r.status,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      })),
+    });
+  }
+
   // ---- POST /api/session : create ----
   if (path === "/api/session" && req.method === "POST") {
     const body = (await req.json().catch(() => ({}))) as { name?: string; vendor?: string };

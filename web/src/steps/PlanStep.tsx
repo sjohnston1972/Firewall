@@ -21,6 +21,13 @@ export function PlanStep({ state, patch, onNext, onBack, step, total }: StepProp
     setBuilding(true);
     try {
       if (!state.sessionId) throw new ApiError("No session", 0, null);
+      // Push the latest design (incl. NGFW + protection toggles) and the enabled
+      // packs so the backend plan reflects everything the engineer selected.
+      await api.design(state.sessionId, state.design, state.ngfw, state.protection);
+      await api.setPacks(
+        state.sessionId,
+        state.packs.filter((p) => p.enabled).map((p) => p.id),
+      );
       const result = await api.plan(state.sessionId);
       patch({ plan: result });
     } catch {

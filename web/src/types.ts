@@ -290,3 +290,13 @@ export interface Session {
   status: string;
   createdAt: string;
 }
+
+/** A saved session as shown in the "Sessions" list. */
+export interface SessionSummary {
+  id: string;
+  name: string;
+  vendor: Vendor;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}

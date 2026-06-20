@@ -33,6 +33,23 @@ export const db = {
     return env.DB.prepare(`SELECT * FROM projects WHERE id = ?`).bind(id).first<ProjectRow>();
   },
 
+  async listProjects(env: Env): Promise<ProjectRow[]> {
+    const res = await env.DB.prepare(
+      `SELECT * FROM projects ORDER BY updated_at DESC LIMIT 100`,
+    ).all<ProjectRow>();
+    return res.results ?? [];
+  },
+
+  async renameProject(env: Env, id: string, name: string): Promise<void> {
+    await env.DB.prepare(`UPDATE projects SET name = ?, updated_at = ? WHERE id = ?`)
+      .bind(name.slice(0, 120), nowIso(), id)
+      .run();
+  },
+
+  async touchProject(env: Env, id: string): Promise<void> {
+    await env.DB.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`).bind(nowIso(), id).run();
+  },
+
   async setProjectStatus(env: Env, id: string, status: string): Promise<void> {
     await env.DB.prepare(`UPDATE projects SET status = ?, updated_at = ? WHERE id = ?`)
       .bind(status, nowIso(), id)

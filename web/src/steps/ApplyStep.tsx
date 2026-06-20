@@ -24,7 +24,7 @@ export function ApplyStep({ state, patch, onNext, onBack, step, total }: StepPro
     setApplying(true);
     try {
       if (!state.sessionId) throw new ApiError("No session", 0, null);
-      const res = await api.apply(state.sessionId, mode);
+      const res = await api.apply(state.sessionId, mode, mode === "live" ? ack.trim() : undefined);
       patch({ applyResult: res });
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Apply failed.";

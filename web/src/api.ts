@@ -1,21 +1,28 @@
 /**
  * Typed fetch client for the Bastion Worker API (CLAUDE.md §9).
  *
- * Every path here matches the documented API surface exactly. The UI is built
- * to render before a backend exists, so callers should expect these to reject
- * with `ApiError` and handle it with placeholder/empty states.
+ * This layer is the ADAPTER between the SPA's wire types (web/src/types.ts) and
+ * the backend's IR-shaped contract (the Durable Object). Requests are mapped to
+ * what the backend expects; responses are mapped back to the UI's shapes. Keeping
+ * this here means the step components never have to know the IR encoding.
  */
 import type {
   ApplyMode,
   ApplyResult,
   ConnInfo,
+  Credentials,
   Design,
   DeviceInventory,
+  DiffLine,
   ImportFormat,
   ImportResult,
+  NgfwSettings,
   PlanDiff,
+  PlanSection,
   PolicyPack,
+  ProtectionSettings,
   Session,
+  SessionSummary,
   TargetConfig,
   Validation,
   VerifyResult,
@@ -45,7 +52,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch (cause) {
-    // Network failure / no backend yet — surface uniformly.
     throw new ApiError("Network unreachable", 0, cause);
   }
 
@@ -70,76 +76,273 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const json = (data: unknown): RequestInit => ({
-  method: "POST",
-  body: JSON.stringify(data),
-});
+const post = (data: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(data) });
+
+// ---------- request mappers (UI shape -> backend shape) ----------
+
+/** Map the UI credentials to the backend's Credentials (Meraki uses cloud keys). */
+function mapCreds(vendor: Vendor, c: Credentials): Record<string, unknown> {
+  if (vendor === "meraki") {
+    return {
+      merakiApiKey: c.apiKey,
+      merakiOrgId: c.orgId,
+      merakiNetworkId: c.networkId,
+    };
+  }
+  return { host: c.host, username: c.username, password: c.password, apiKey: c.apiKey };
+}
+
+/** Build the backend Partial<IR> design payload from the UI design + toggles. */
+function mapDesign(
+  design: Design,
+  ngfw?: NgfwSettings,
+  protection?: ProtectionSettings,
+): Record<string, unknown> {
+  // Derive interface stubs from the zones so the plan/validate see them defined.
+  const ifaceZone = new Map<string, string>();
+  for (const z of design.zones) for (const i of z.interfaces) ifaceZone.set(i, z.name);
+  const interfaces = [...ifaceZone.entries()].map(([name, zone]) => ({
+    name,
+    enabled: true,
+    zone,
+  }));
+
+  const ngfwProfiles =
+    ngfw && Object.values(ngfw).some(Boolean)
+      ? [{ name: "baseline", ...ngfw }]
+      : [];
+
+  return {
+    system: {
+      hostname: design.hostname,
+      dns: design.dns,
+      ntp: design.ntp,
+      timezone: design.timezone,
+      management: design.management,
+    },
+    interfaces,
+    zones: design.zones.map((z) => ({ name: z.name, type: z.type, interfaces: z.interfaces })),
+    ngfw: ngfwProfiles,
+    protection: protection ?? undefined,
+  };
+}
+
+// ---------- response mappers (backend shape -> UI shape) ----------
+
+function mapConn(raw: unknown): ConnInfo {
+  const c = (raw as { conn?: Record<string, unknown> })?.conn ?? {};
+  const licenses = c.licenses as string[] | undefined;
+  return {
+    ok: Boolean(c.reachable),
+    model: c.model as string | undefined,
+    version: c.version as string | undefined,
+    serial: c.serial as string | undefined,
+    license: licenses?.join(", "),
+    haState: c.haState as string | undefined,
+    message: c.reachable ? undefined : "Device did not respond as reachable.",
+  };
+}
+
+function mapInventory(raw: unknown): DeviceInventory {
+  const r = raw as { inventory?: Record<string, unknown>; backup?: { ref?: string } };
+  const inv = r.inventory ?? {};
+  const addr = (inv.addressObjects as unknown[]) ?? [];
+  const svc = (inv.serviceObjects as unknown[]) ?? [];
+  return {
+    interfaces: (inv.interfaces as DeviceInventory["interfaces"]) ?? [],
+    zones: (inv.zones as DeviceInventory["zones"]) ?? [],
+    routes: (inv.routes as DeviceInventory["routes"]) ?? [],
+    objectCount: addr.length + svc.length,
+    haState: inv.haState as string | undefined,
+    backupRef: r.backup?.ref,
+  };
+}
+
+const SECTION_TITLES: Record<string, string> = {
+  interfaces: "Interfaces",
+  zones: "Zones",
+  addresses: "Address objects",
+  services: "Service objects",
+  nat: "NAT rules",
+  security: "Security rules",
+  vpn: "VPN tunnels",
+  ngfw: "NGFW profiles",
+  system: "System (hostname / DNS / NTP)",
+  protection: "Zone protection / hardening",
+};
+
+interface BackendDiff {
+  summary: string;
+  sections: Record<string, { added: number; removed: number; changed: number }>;
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+function mapPlan(raw: unknown): PlanDiff {
+  const r = raw as { version?: number; diff?: BackendDiff };
+  const diff = r.diff ?? { summary: "", sections: {}, added: [], removed: [], changed: [] };
+
+  // Bucket the "section: name" lines back into their sections.
+  const bySection = (list: string[], op: DiffLine["op"]): Record<string, DiffLine[]> => {
+    const out: Record<string, DiffLine[]> = {};
+    for (const entry of list) {
+      const idx = entry.indexOf(":");
+      const key = idx >= 0 ? entry.slice(0, idx).trim() : "other";
+      const text = idx >= 0 ? entry.slice(idx + 1).trim() : entry;
+      (out[key] ??= []).push({ op, text });
+    }
+    return out;
+  };
+  const adds = bySection(diff.added, "add");
+  const rems = bySection(diff.removed, "remove");
+  const chgs = bySection(diff.changed, "modify");
+
+  const sections: PlanSection[] = Object.entries(diff.sections).map(([key, counts]) => ({
+    key,
+    title: SECTION_TITLES[key] ?? key,
+    added: counts.added,
+    modified: counts.changed,
+    removed: counts.removed,
+    lines: [...(adds[key] ?? []), ...(chgs[key] ?? []), ...(rems[key] ?? [])],
+  }));
+
+  const totalChanges = diff.added.length + diff.removed.length + diff.changed.length;
+  return { version: r.version ?? 1, sections, totalChanges };
+}
 
 // ---------- API surface (CLAUDE.md §9) ----------
 export const api = {
+  // GET /api/sessions
+  listSessions(): Promise<{ sessions: SessionSummary[] }> {
+    return request<{ sessions: SessionSummary[] }>("/api/sessions");
+  },
+
   // POST /api/session
-  createSession(vendor: Vendor): Promise<Session> {
-    return request<Session>("/api/session", json({ vendor }));
+  async createSession(vendor: Vendor, name?: string): Promise<Session> {
+    const r = await request<{ id: string; name: string; vendor: Vendor }>(
+      "/api/session",
+      post({ vendor, name }),
+    );
+    return { id: r.id, vendor: r.vendor, status: "created", createdAt: new Date().toISOString() };
+  },
+
+  // GET/POST /api/session/:id/state  — save & resume wizard progress
+  saveState(id: string, wizard: unknown, name?: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/session/${id}/state`, post({ wizard, name }));
+  },
+  loadState<T = unknown>(id: string): Promise<{ wizard: T | null }> {
+    return request<{ wizard: T | null }>(`/api/session/${id}/state`);
   },
 
   // POST /api/session/:id/connect
   connect(id: string, target: TargetConfig): Promise<ConnInfo> {
-    return request<ConnInfo>(`/api/session/${id}/connect`, json(target));
+    const payload = {
+      target: {
+        vendor: target.vendor,
+        transport: target.transport,
+        tunnelHostname: target.tunnelHostname,
+        relayToken: target.relayToken,
+      },
+      creds: mapCreds(target.vendor, target.credentials),
+    };
+    return request<unknown>(`/api/session/${id}/connect`, post(payload)).then(mapConn);
   },
 
   // POST /api/session/:id/discover
   discover(id: string): Promise<DeviceInventory> {
-    return request<DeviceInventory>(`/api/session/${id}/discover`, json({}));
+    return request<unknown>(`/api/session/${id}/discover`, post({})).then(mapInventory);
   },
 
   // POST /api/session/:id/design
-  design(id: string, design: Design): Promise<{ ok: boolean }> {
-    return request<{ ok: boolean }>(`/api/session/${id}/design`, json(design));
+  design(
+    id: string,
+    design: Design,
+    ngfw?: NgfwSettings,
+    protection?: ProtectionSettings,
+  ): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(
+      `/api/session/${id}/design`,
+      post(mapDesign(design, ngfw, protection)),
+    );
   },
 
   // POST /api/session/:id/import
-  import(
+  async import(
     id: string,
     payload: { format: ImportFormat; source: string },
   ): Promise<ImportResult> {
-    return request<ImportResult>(`/api/session/${id}/import`, json(payload));
+    const r = await request<{
+      importId: string;
+      ok: boolean;
+      model?: string;
+      fragment?: unknown;
+      errors?: { path: string; message: string }[];
+      warnings?: ImportResult["warnings"];
+    }>(`/api/session/${id}/import`, post({ sourceText: payload.source, format: payload.format }));
+    const after = r.ok
+      ? JSON.stringify(r.fragment ?? {}, null, 2)
+      : "Normalisation failed:\n" +
+        (r.errors ?? []).map((e) => `• ${e.path}: ${e.message}`).join("\n");
+    return {
+      id: r.importId,
+      format: payload.format,
+      before: payload.source,
+      after,
+      warnings: r.warnings ?? [],
+      accepted: false,
+      model: r.model,
+    };
   },
 
   // POST /api/session/:id/import/:i/accept
   acceptImport(id: string, importId: string): Promise<{ ok: boolean }> {
-    return request<{ ok: boolean }>(
-      `/api/session/${id}/import/${importId}/accept`,
-      json({ accepted: true }),
-    );
+    return request<{ ok: boolean }>(`/api/session/${id}/import/${importId}/accept`, post({}));
   },
 
-  // POST /api/session/:id/packs
-  packs(
-    id: string,
-    enabled?: string[],
-  ): Promise<{ packs: PolicyPack[] }> {
-    return request<{ packs: PolicyPack[] }>(
-      `/api/session/${id}/packs`,
-      json(enabled ? { enabled } : {}),
-    );
+  // GET /api/packs  — the catalogue (returned with enabled:false for the UI)
+  async packs(_id?: string): Promise<{ packs: PolicyPack[] }> {
+    const r = await request<{ packs: Omit<PolicyPack, "enabled">[] }>("/api/packs");
+    return { packs: r.packs.map((p) => ({ ...p, enabled: false })) };
+  },
+
+  // POST /api/session/:id/packs  — persist the enabled set
+  setPacks(id: string, enabled: string[]): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/session/${id}/packs`, post({ enabled }));
   },
 
   // POST /api/session/:id/plan
-  plan(id: string, body?: unknown): Promise<PlanDiff> {
-    return request<PlanDiff>(`/api/session/${id}/plan`, json(body ?? {}));
+  plan(id: string): Promise<PlanDiff> {
+    return request<unknown>(`/api/session/${id}/plan`, post({})).then(mapPlan);
   },
 
   // POST /api/session/:id/validate
   validate(id: string): Promise<Validation> {
-    return request<Validation>(`/api/session/${id}/validate`, json({}));
+    return request<{ validation: Validation }>(`/api/session/${id}/validate`, post({})).then(
+      (r) => r.validation,
+    );
   },
 
   // POST /api/session/:id/apply
-  apply(id: string, mode: ApplyMode): Promise<ApplyResult> {
-    return request<ApplyResult>(`/api/session/${id}/apply`, json({ mode }));
+  async apply(id: string, mode: ApplyMode, acknowledge?: string): Promise<ApplyResult> {
+    const r = await request<{
+      runId: string;
+      mode: ApplyMode;
+      bundle?: { ref?: string; filename?: string };
+      result?: { ok: boolean; committed: boolean; jobId?: string; messages: string[] };
+    }>(`/api/session/${id}/apply`, post({ mode, acknowledge }));
+    if (mode === "staged") {
+      return { ok: true, mode, bundleRef: r.bundle?.ref };
+    }
+    return {
+      ok: Boolean(r.result?.ok),
+      mode,
+      commitId: r.result?.jobId,
+      message: r.result?.messages?.join("; "),
+    };
   },
 
-  // GET /api/session/:id/bundle  — returns the staged config bundle URL
+  // GET /api/session/:id/bundle
   bundleUrl(id: string): string {
     return `/api/session/${id}/bundle`;
   },
@@ -151,26 +354,38 @@ export const api = {
   },
 
   // POST /api/session/:id/verify
-  verify(id: string): Promise<VerifyResult> {
-    return request<VerifyResult>(`/api/session/${id}/verify`, json({}));
+  async verify(id: string): Promise<VerifyResult> {
+    const r = await request<{ checks?: { kind: string; name: string; present: boolean }[] }>(
+      `/api/session/${id}/verify`,
+      post({}),
+    );
+    const checks = r.checks ?? [];
+    return {
+      ok: checks.every((c) => c.present),
+      rows: checks.map((c) => ({
+        item: `${c.kind} ${c.name}`,
+        expected: "present",
+        actual: c.present ? "present" : "absent",
+        match: c.present,
+      })),
+    };
   },
 
   // POST /api/session/:id/rollback
-  rollback(id: string): Promise<{ ok: boolean; message?: string }> {
-    return request<{ ok: boolean; message?: string }>(
+  async rollback(id: string): Promise<{ ok: boolean; message?: string }> {
+    const r = await request<{ ok: boolean; restoredFrom?: string }>(
       `/api/session/${id}/rollback`,
-      json({}),
+      post({}),
     );
+    return { ok: r.ok, message: r.restoredFrom ? `Restored from ${r.restoredFrom}` : undefined };
   },
 
-  // GET /api/session/:id/report  — generated build report (PDF)
+  // GET /api/session/:id/report  — markdown build report
   reportUrl(id: string): string {
     return `/api/session/${id}/report`;
   },
-  report(id: string): Promise<Blob> {
-    return fetch(`/api/session/${id}/report`).then((r) => {
-      if (!r.ok) throw new ApiError("Report unavailable", r.status, null);
-      return r.blob();
-    });
+  async report(id: string): Promise<Blob> {
+    const r = await request<{ report?: string }>(`/api/session/${id}/report`);
+    return new Blob([r.report ?? "(empty report)"], { type: "text/markdown" });
   },
 };
