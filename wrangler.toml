@@ -1,8 +1,14 @@
-name = "bastion"
+﻿name = "bastion"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
+workers_dev = false
+preview_urls = false
+
+# Custom domain — auto-creates the DNS record + cert for bastion.clydeford.net.
+[[routes]]
+pattern = "bastion.clydeford.net"
+custom_domain = true
 
 # The Worker serves the built SPA from web/ (Vite output) as static assets.
 [assets]
@@ -24,7 +30,7 @@ new_sqlite_classes = ["SessionDO"]
 binding = "DB"
 database_name = "bastion"
 # Replace database_id after `wrangler d1 create bastion`
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "114b4fcf-83d8-4baf-94c5-910ffb5a6ca9"
 migrations_dir = "migrations"
 
 # ---- R2: object store ----
