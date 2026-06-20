@@ -57,7 +57,7 @@ export const VENDORS: VendorMeta[] = [
   },
 ];
 
-export type Transport = "direct" | "tunnel" | "relay";
+export type Transport = "direct" | "tunnel" | "relay" | "container";
 
 export interface TransportMeta {
   id: Transport;
@@ -66,9 +66,10 @@ export interface TransportMeta {
 }
 
 export const TRANSPORTS: TransportMeta[] = [
-  { id: "direct", label: "Direct", blurb: "Mgmt IP is internet-reachable" },
+  { id: "direct", label: "Direct", blurb: "Public mgmt IP with a trusted cert" },
+  { id: "container", label: "Cloud proxy", blurb: "Ephemeral CF container · handles self-signed certs" },
   { id: "tunnel", label: "Cloudflare Tunnel", blurb: "cloudflared exposes the mgmt endpoint" },
-  { id: "relay", label: "Relay agent", blurb: "On-site agent dials outbound over WSS" },
+  { id: "relay", label: "Relay agent", blurb: "On-site agent for private networks" },
 ];
 
 // ---------- credentials / target ----------

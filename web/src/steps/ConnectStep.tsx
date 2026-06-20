@@ -224,6 +224,17 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                 </div>
               )}
 
+              {target.transport === "container" && (
+                <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-3 text-[11px] leading-relaxed text-ink-500">
+                  <span className="text-slate-200">Cloud proxy</span> spins up a short-lived
+                  Cloudflare container for this session and routes API calls through it. Because the
+                  container is a real runtime, it reaches management planes with{" "}
+                  <span className="text-slate-200">self-signed certificates</span> — no on-site agent
+                  needed. The device just has to be reachable from Cloudflare's network (a public
+                  mgmt IP). The container sleeps automatically when idle.
+                </div>
+              )}
+
               {target.transport === "direct" && (
                 <p className="text-[11px] leading-relaxed text-ink-500">
                   Direct requires a publicly reachable mgmt IP with a{" "}

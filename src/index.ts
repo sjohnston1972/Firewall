@@ -7,6 +7,7 @@ import { HttpError, json } from "./types";
 import { handleApi } from "./router";
 
 export { SessionDO } from "./session-do";
+export { ProxyContainer } from "./container";
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {

@@ -1,10 +1,12 @@
 /** Shared backend types: Worker environment bindings and common shapes. */
 import type { IR } from "../schema/ir";
+import type { ProxyContainer } from "./container";
 
 export interface Env {
   // Bindings (wrangler.toml)
   ASSETS: Fetcher;
   SESSION: DurableObjectNamespace;
+  PROXY: DurableObjectNamespace<ProxyContainer>; // per-session cloud-proxy container
   DB: D1Database;
   R2: R2Bucket;
 
@@ -21,7 +23,7 @@ export interface Env {
 export type Vendor = IR["meta"]["vendor"];
 export const VENDORS: Vendor[] = ["panos", "fortios", "ftd", "asa", "meraki"];
 
-export type TransportKind = "direct" | "tunnel" | "relay";
+export type TransportKind = "direct" | "tunnel" | "relay" | "container";
 
 /** Credentials live only in DO memory (CLAUDE.md §5/§12). */
 export interface Credentials {

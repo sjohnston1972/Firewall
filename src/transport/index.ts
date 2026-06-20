@@ -11,10 +11,12 @@ import type { Transport, TransportContext } from "./types";
 import { DirectTransport } from "./direct";
 import { TunnelTransport } from "./tunnel";
 import { RelayTransport } from "./relay";
+import { ContainerTransport } from "./container";
 
 export { DirectTransport } from "./direct";
 export { TunnelTransport } from "./tunnel";
 export { RelayTransport } from "./relay";
+export { ContainerTransport } from "./container";
 
 export function makeTransport(ctx: TransportContext): Transport {
   switch (ctx.target.transport) {
@@ -24,6 +26,8 @@ export function makeTransport(ctx: TransportContext): Transport {
       return new TunnelTransport(ctx);
     case "relay":
       return new RelayTransport(ctx);
+    case "container":
+      return new ContainerTransport(ctx);
     default: {
       // Exhaustiveness guard: if a new TransportKind is added, this errors.
       const _exhaustive: never = ctx.target.transport;

@@ -12,7 +12,13 @@ import { HttpError, json } from "./types";
 import { IR, IRFragment, type IR as IRType, validateFragment } from "../schema/ir";
 import { getDriver } from "./drivers";
 import { makeTransport } from "./transport";
-import type { Transport, TransportRequest, TransportResponse } from "./transport/types";
+import type {
+  ContainerProxyRequest,
+  Transport,
+  TransportRequest,
+  TransportResponse,
+} from "./transport/types";
+import { getContainer } from "@cloudflare/containers";
 import { normalise } from "./normaliser";
 import { buildPlan, diffIR } from "./plan/engine";
 import { db, uid, nowIso } from "./db";
@@ -147,7 +153,28 @@ export class SessionDO {
       target: this.effectiveTarget(),
       creds: this.creds,
       relaySend: this.relay ? (r) => this.relaySend(r) : undefined,
+      containerSend: (r) => this.containerSend(r),
     });
+  }
+
+  /** Forward a device request through this session's cloud-proxy container. */
+  private async containerSend(payload: ContainerProxyRequest): Promise<TransportResponse> {
+    const container = getContainer(this.env.PROXY, this.requireProject());
+    const res = await container.fetch(
+      new Request("https://proxy/fetch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    );
+    const data = (await res.json()) as {
+      status?: number;
+      headers?: Record<string, string>;
+      body?: string;
+      error?: string;
+    };
+    if (data.error) throw new Error(`cloud proxy: ${data.error}`);
+    return { status: data.status ?? 0, headers: data.headers ?? {}, body: data.body ?? "" };
   }
 
   private driver() {
