@@ -22,6 +22,9 @@ export interface DiscoveredInterface {
   address?: string;
   zone?: string;
   description?: string;
+  link?: "up" | "down";
+  /** physical media type from the platform (e.g. RJ45), when known */
+  hwType?: string;
 }
 
 export interface RouteEntry {

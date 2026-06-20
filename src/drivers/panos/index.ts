@@ -67,6 +67,42 @@ export class PanosDriver implements FirewallDriver {
     return PanosDriver.pick(entryOpenTag, /\bname="([^"]+)"/i);
   }
 
+  /**
+   * Parse the `sw.dev.runtime.ifmon.port-states` system-state value, which lists
+   * every PHYSICAL port the platform exposes (what the GUI shows even when the
+   * port is unconfigured). Format:
+   *   { 'ethernet1/1': { 'link': Down, 'type': RJ45, ... }, 'ethernet1/2': {...} }
+   */
+  private static parsePortStates(
+    text: string,
+  ): { name: string; link?: "up" | "down"; type?: string }[] {
+    const out: { name: string; link?: "up" | "down"; type?: string }[] = [];
+    const re = /'((?:ethernet|ae)[\d/]+)':\s*\{([^}]*)\}/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const body = m[2];
+      const link = /'link':\s*Up/i.test(body)
+        ? "up"
+        : /'link':\s*Down/i.test(body)
+          ? "down"
+          : undefined;
+      const type = PanosDriver.pick(body, /'type':\s*([A-Za-z0-9-]+)/i);
+      out.push({ name: m[1], link, type });
+    }
+    return out;
+  }
+
+  /** Natural sort so ethernet1/2 precedes ethernet1/10. */
+  private static ifaceSort(a: string, b: string): number {
+    const na = a.match(/\d+/g)?.map(Number) ?? [];
+    const nb = b.match(/\d+/g)?.map(Number) ?? [];
+    for (let i = 0; i < Math.max(na.length, nb.length); i++) {
+      const d = (na[i] ?? 0) - (nb[i] ?? 0);
+      if (d !== 0) return d;
+    }
+    return a.localeCompare(b);
+  }
+
   /** Obtain (and cache) a PAN-OS API key via the keygen endpoint. */
   private async ensureApiKey(): Promise<string> {
     if (this.apiKey) return this.apiKey;
@@ -171,6 +207,7 @@ export class PanosDriver implements FirewallDriver {
           enabled: state ? /up/i.test(state) : true,
           address: ip && ip !== "N/A" && ip !== "" ? ip : undefined,
           zone: zone && zone !== "N/A" && zone !== "" ? zone : undefined,
+          link: state ? (/up/i.test(state) ? "up" : "down") : undefined,
         });
         if (zone && zone !== "N/A" && zone !== "") {
           const arr = zoneMembers.get(zone) ?? [];
@@ -219,6 +256,31 @@ export class PanosDriver implements FirewallDriver {
     } catch {
       // tolerate
     }
+
+    // Physical ports (system state). On a PA-VM the dataplane may not instantiate
+    // ports (so `show interface all` is empty) yet the platform still exposes the
+    // slots — this is exactly what the GUI lists. Merge any not already seen so
+    // the engineer can design zones onto them.
+    try {
+      const xml = await this.op(
+        "<show><system><state><filter>sw.dev.runtime.ifmon.port-states</filter></state></system></show>",
+      );
+      const seen = new Set(interfaces.map((i) => i.name));
+      for (const p of PanosDriver.parsePortStates(xml)) {
+        if (seen.has(p.name)) continue;
+        interfaces.push({
+          name: p.name,
+          enabled: p.link === "up",
+          link: p.link,
+          hwType: p.type,
+        });
+        seen.add(p.name);
+      }
+    } catch {
+      // tolerate
+    }
+
+    interfaces.sort((a, b) => PanosDriver.ifaceSort(a.name, b.name));
 
     // Zones: prefer the configured zone list (covers zones with no live iface);
     // fall back to zones derived from the interface→zone mapping above.
