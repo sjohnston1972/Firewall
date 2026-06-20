@@ -132,6 +132,8 @@ function mapDesign(
 function mapConn(raw: unknown): ConnInfo {
   const c = (raw as { conn?: Record<string, unknown> })?.conn ?? {};
   const licenses = c.licenses as string[] | undefined;
+  // The driver puts the real failure cause in `raw` on error — surface it.
+  const rawMsg = typeof c.raw === "string" ? c.raw : undefined;
   return {
     ok: Boolean(c.reachable),
     model: c.model as string | undefined,
@@ -139,7 +141,7 @@ function mapConn(raw: unknown): ConnInfo {
     serial: c.serial as string | undefined,
     license: licenses?.join(", "),
     haState: c.haState as string | undefined,
-    message: c.reachable ? undefined : "Device did not respond as reachable.",
+    message: c.reachable ? undefined : (rawMsg ?? "Device did not respond as reachable."),
   };
 }
 

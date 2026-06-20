@@ -43,11 +43,25 @@ export class DirectTransport implements Transport {
     // with self-signed certs the recommended path is the relay agent transport.
     void this.creds.verifyTls; // referenced for intent; not enforceable here.
 
-    const res = await fetch(url, {
-      method: req.method,
-      headers: req.headers ?? {},
-      body: req.body ?? undefined,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: req.method,
+        headers: req.headers ?? {},
+        body: req.body ?? undefined,
+      });
+    } catch (err) {
+      // The most common cause against a firewall mgmt plane is an untrusted /
+      // self-signed certificate, which Cloudflare Workers' fetch refuses (and
+      // cannot be told to ignore). Give an actionable message.
+      const detail = (err as Error)?.message ?? String(err);
+      throw new Error(
+        `Direct HTTPS to ${base} failed: ${detail}. ` +
+          `If the device uses a self-signed or untrusted certificate, the Worker cannot bypass ` +
+          `TLS verification — use the Relay agent transport (it can reach self-signed mgmt planes), ` +
+          `a Cloudflare Tunnel with origin TLS verification disabled, or install a trusted cert on the device.`,
+      );
+    }
 
     const headers: Record<string, string> = {};
     res.headers.forEach((value, key) => {

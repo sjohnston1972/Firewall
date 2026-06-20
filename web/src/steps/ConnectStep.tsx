@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { StepProps } from "../App";
 import { api, ApiError } from "../api";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -26,6 +26,22 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
 
   const setTransport = (t: Transport) => patch({ target: { ...target, transport: t } });
 
+  // The relay agent needs a session id to dial. Mint one as soon as the relay
+  // transport is chosen so the copy-paste command below is ready.
+  useEffect(() => {
+    if (target.transport === "relay" && !state.sessionId) {
+      api
+        .createSession(target.vendor)
+        .then((s) => patch({ sessionId: s.id }))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target.transport]);
+
+  const relayCmd =
+    `node relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
+    `${state.sessionId ?? "<session-id>"} --device ${target.credentials.host || "https://<mgmt-ip>"}`;
+
   const connected = state.conn?.ok === true;
 
   const testConnection = async () => {
@@ -43,7 +59,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
       if (!conn.ok) setError(conn.message ?? "Authentication failed.");
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Connection test failed.";
-      setError(`${msg} — the backend may not be running yet.`);
+      setError(msg);
       patch({ conn: null });
     } finally {
       setTesting(false);
@@ -166,18 +182,6 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                     onChange={(e) => patch({ target: { ...target, tunnelHostname: e.target.value } })}
                   />
                 )}
-                {target.transport === "relay" && (
-                  <Field
-                    id="relayToken"
-                    label="Relay agent token"
-                    mono
-                    type="password"
-                    placeholder="short-lived token"
-                    hint="The on-site agent dials outbound to this session over WSS."
-                    value={target.relayToken ?? ""}
-                    onChange={(e) => patch({ target: { ...target, relayToken: e.target.value } })}
-                  />
-                )}
                 <Field
                   id="username"
                   label="Username"
@@ -196,6 +200,33 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                   onChange={(e) => setCred("password", e.target.value)}
                 />
               </div>
+
+              {target.transport === "relay" && (
+                <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-3">
+                  <p className="text-xs font-medium text-slate-200">Run the on-site agent</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-ink-500">
+                    On a host that can reach the firewall, run the command below. It dials outbound
+                    to this session over WSS and forwards API calls to the device — and it can talk
+                    to self-signed management certs (which the Worker cannot).
+                  </p>
+                  <code className="mt-2 block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-2 font-mono text-[11px] text-accent">
+                    {relayCmd}
+                  </code>
+                  <p className="mt-2 text-[11px] text-ink-500">
+                    Then click <span className="text-slate-200">Test connection</span>. The agent is
+                    in <span className="font-mono">agent/relay-agent.mjs</span>.
+                  </p>
+                </div>
+              )}
+
+              {target.transport === "direct" && (
+                <p className="text-[11px] leading-relaxed text-ink-500">
+                  Direct requires a publicly reachable mgmt IP with a{" "}
+                  <span className="text-slate-200">trusted TLS certificate</span>. Devices with
+                  self-signed certs (most firewalls by default) need the Relay agent or a Cloudflare
+                  Tunnel — the Worker cannot bypass certificate verification.
+                </p>
+              )}
             </div>
           )}
 
@@ -208,8 +239,13 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                 {connected ? "authenticated" : "failed"}
               </StatusBadge>
             )}
-            {error && <span className="text-xs text-bad">{error}</span>}
           </div>
+
+          {error && (
+            <div className="mt-3 rounded-lg border border-bad/30 bg-bad/5 p-3 text-xs leading-relaxed text-bad">
+              {error}
+            </div>
+          )}
 
           {connected && (
             <dl className="mt-4 grid gap-px overflow-hidden rounded-lg border border-ink-700 bg-ink-700 sm:grid-cols-4">

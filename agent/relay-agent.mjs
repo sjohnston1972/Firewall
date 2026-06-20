@@ -23,14 +23,28 @@ function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
+function flag(name) {
+  return process.argv.includes(`--${name}`);
+}
 
 const WS_URL = arg("url");
 const DEVICE_BASE = arg("device");
+// Firewall management planes almost always present a self-signed certificate.
+// The whole point of the on-site agent is that IT can reach them (unlike the
+// Worker), so we skip TLS verification on the device side by default. Pass
+// --secure to enforce verification.
+const SECURE = flag("secure");
+if (!SECURE) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 if (!WS_URL || !DEVICE_BASE) {
-  console.error("usage: node relay-agent.mjs --url wss://.../api/relay/<token> --device https://<mgmt-ip>");
+  console.error(
+    "usage: node relay-agent.mjs --url wss://.../api/relay/<session-id> --device https://<mgmt-ip> [--secure]",
+  );
   process.exit(1);
 }
+console.log(`[relay] device=${DEVICE_BASE} tls-verify=${SECURE ? "on" : "off (self-signed ok)"}`);
 
 function connect() {
   console.log(`[relay] connecting to ${WS_URL}`);
