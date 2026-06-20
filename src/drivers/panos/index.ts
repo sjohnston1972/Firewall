@@ -49,6 +49,24 @@ export class PanosDriver implements FirewallDriver {
     return m && m[1] !== undefined ? m[1].trim() : undefined;
   }
 
+  /** Return the inner text of the first <tag>…</tag>, or "". */
+  private static section(xml: string, tag: string): string {
+    const m = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(xml);
+    return m ? m[1] : "";
+  }
+
+  /** Iterate the inner text of each top-ish <entry>…</entry> in a section. */
+  private static *entries(section: string): Generator<string> {
+    const re = /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(section)) !== null) yield m[1];
+  }
+
+  /** The `name` attribute of an <entry name="…">, if present. */
+  private static entryName(entryOpenTag: string): string | undefined {
+    return PanosDriver.pick(entryOpenTag, /\bname="([^"]+)"/i);
+  }
+
   /** Obtain (and cache) a PAN-OS API key via the keygen endpoint. */
   private async ensureApiKey(): Promise<string> {
     if (this.apiKey) return this.apiKey;
@@ -85,6 +103,20 @@ export class PanosDriver implements FirewallDriver {
     return res.body;
   }
 
+  /** Read a running-config subtree via the config API (type=config&action=get). */
+  private async configGet(xpath: string): Promise<string> {
+    const key = await this.ensureApiKey();
+    const req: TransportRequest = {
+      method: "GET",
+      path: `/api/?type=config&action=get&xpath=${encodeURIComponent(xpath)}&key=${encodeURIComponent(key)}`,
+    };
+    const res = await this.transport.fetch(req);
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`PAN-OS config get failed: HTTP ${res.status}`);
+    }
+    return res.body;
+  }
+
   // ---------- contract ----------
 
   async testConnection(): Promise<ConnInfo> {
@@ -112,45 +144,65 @@ export class PanosDriver implements FirewallDriver {
     const serviceObjects: { name: string; value: string }[] = [];
     let haState: string | undefined;
 
-    // Interfaces: <show><interface>all</interface></show>
+    // Interfaces + zones. `show interface all` is operational and returns the
+    // interface NAME as a child <name> element (not a name= attribute), grouped
+    // under <ifnet> (logical, has ip + zone) and <hw> (physical, has state).
+    const zoneMembers = new Map<string, string[]>();
     try {
       const xml = await this.op("<show><interface>all</interface></show>");
-      // Each logical/hw interface appears in an <entry name="..."> block.
-      const entryRe = /<entry[^>]*\bname="([^"]+)"[^>]*>([\s\S]*?)<\/entry>/gi;
-      let m: RegExpExecArray | null;
-      while ((m = entryRe.exec(xml)) !== null) {
-        const name = m[1];
-        const block = m[2];
+
+      // up/down state per interface from the <hw> section.
+      const hwState = new Map<string, string>();
+      for (const block of PanosDriver.entries(PanosDriver.section(xml, "hw"))) {
+        const name = PanosDriver.pick(block, /<name>([^<]+)<\/name>/i);
+        const state = PanosDriver.pick(block, /<state>([^<]+)<\/state>/i);
+        if (name) hwState.set(name, state ?? "");
+      }
+
+      // logical interfaces (name, ip, zone) from <ifnet>.
+      for (const block of PanosDriver.entries(PanosDriver.section(xml, "ifnet"))) {
+        const name = PanosDriver.pick(block, /<name>([^<]+)<\/name>/i);
+        if (!name) continue;
         const ip = PanosDriver.pick(block, /<ip>([^<]+)<\/ip>/i);
         const zone = PanosDriver.pick(block, /<zone>([^<]+)<\/zone>/i);
-        const state = PanosDriver.pick(block, /<state>([^<]+)<\/state>/i);
+        const state = hwState.get(name);
         interfaces.push({
           name,
           enabled: state ? /up/i.test(state) : true,
-          address: ip && ip !== "N/A" ? ip : undefined,
-          zone: zone && zone !== "N/A" ? zone : undefined,
+          address: ip && ip !== "N/A" && ip !== "" ? ip : undefined,
+          zone: zone && zone !== "N/A" && zone !== "" ? zone : undefined,
         });
+        if (zone && zone !== "N/A" && zone !== "") {
+          const arr = zoneMembers.get(zone) ?? [];
+          if (!arr.includes(name)) arr.push(name);
+          zoneMembers.set(zone, arr);
+        }
       }
     } catch {
       // tolerate — leave interfaces empty
     }
 
-    // Zones: <show><zone></zone></show> (or config read). Best-effort parse.
+    // Zones: prefer the configured zone list (covers zones with no live iface);
+    // fall back to zones derived from the interface→zone mapping above.
     try {
-      const xml = await this.op("<show><zone></zone></show>");
-      const entryRe = /<entry[^>]*\bname="([^"]+)"[^>]*>([\s\S]*?)<\/entry>/gi;
-      let m: RegExpExecArray | null;
-      while ((m = entryRe.exec(xml)) !== null) {
-        const zname = m[1];
-        const block = m[2];
-        const members = [...block.matchAll(/<member[^>]*>([^<]+)<\/member>/gi)].map(
-          (x) => x[1].trim(),
+      const xml = await this.configGet(
+        "/config/devices/entry/vsys/entry/zone",
+      );
+      for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) {
+        const open = xml.slice(m.index, xml.indexOf(">", m.index) + 1);
+        const zname = PanosDriver.entryName(open);
+        if (!zname) continue;
+        const members = [...m[1].matchAll(/<member[^>]*>([^<]+)<\/member>/gi)].map((x) =>
+          x[1].trim(),
         );
-        zones.push({ name: zname, interfaces: members });
+        zones.push({ name: zname, interfaces: members.length ? members : (zoneMembers.get(zname) ?? []) });
+        zoneMembers.delete(zname);
       }
     } catch {
       // tolerate
     }
+    // Any zones only seen via interfaces (config read failed / empty).
+    for (const [zname, members] of zoneMembers) zones.push({ name: zname, interfaces: members });
 
     // Routing table: <show><routing><route></route></routing></show>
     try {
@@ -172,6 +224,39 @@ export class PanosDriver implements FirewallDriver {
           iface,
           metric: metricStr ? Number(metricStr) : undefined,
         });
+      }
+    } catch {
+      // tolerate
+    }
+
+    // Address objects (config): name attr + ip-netmask | ip-range | fqdn.
+    try {
+      const xml = await this.configGet("/config/devices/entry/vsys/entry/address");
+      for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) {
+        const open = xml.slice(m.index, xml.indexOf(">", m.index) + 1);
+        const name = PanosDriver.entryName(open);
+        if (!name) continue;
+        const value =
+          PanosDriver.pick(m[1], /<ip-netmask>([^<]+)<\/ip-netmask>/i) ??
+          PanosDriver.pick(m[1], /<ip-range>([^<]+)<\/ip-range>/i) ??
+          PanosDriver.pick(m[1], /<fqdn>([^<]+)<\/fqdn>/i) ??
+          "";
+        addressObjects.push({ name, value });
+      }
+    } catch {
+      // tolerate
+    }
+
+    // Service objects (config): name attr + protocol/port.
+    try {
+      const xml = await this.configGet("/config/devices/entry/vsys/entry/service");
+      for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) {
+        const open = xml.slice(m.index, xml.indexOf(">", m.index) + 1);
+        const name = PanosDriver.entryName(open);
+        if (!name) continue;
+        const proto = /<tcp>/i.test(m[1]) ? "tcp" : /<udp>/i.test(m[1]) ? "udp" : "";
+        const port = PanosDriver.pick(m[1], /<port>([^<]+)<\/port>/i) ?? "";
+        serviceObjects.push({ name, value: proto && port ? `${proto}/${port}` : proto || port });
       }
     } catch {
       // tolerate
