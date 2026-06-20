@@ -100,6 +100,8 @@ export class SessionDO {
           return await this.rollback();
         case url.pathname.includes("/report"):
           return await this.report();
+        case url.pathname.includes("/wipe"):
+          return await this.wipe();
         case url.pathname.includes("/state"):
           return req.method === "POST" ? await this.saveWizard(body) : await this.loadWizard();
         case url.pathname.includes("/init"):
@@ -217,6 +219,22 @@ export class SessionDO {
     this.requireProject();
     const wizard = (await this.state.storage.get("wizard")) ?? null;
     return json({ wizard });
+  }
+
+  /** Drop all persisted + in-memory session state (used on delete). */
+  private async wipe(): Promise<Response> {
+    await this.state.storage.deleteAll();
+    this.mem = {};
+    this.creds = {};
+    if (this.relay) {
+      try {
+        this.relay.close();
+      } catch {
+        /* ignore */
+      }
+      this.relay = null;
+    }
+    return json({ ok: true });
   }
 
   private async connect(body: Record<string, unknown>): Promise<Response> {

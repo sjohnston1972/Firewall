@@ -229,6 +229,11 @@ export const api = {
     return { id: r.id, vendor: r.vendor, status: "created", createdAt: new Date().toISOString() };
   },
 
+  // DELETE /api/session/:id  — discard & delete a session (D1 + R2 + DO state)
+  deleteSession(id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/session/${id}`, { method: "DELETE" });
+  },
+
   // GET/POST /api/session/:id/state  — save & resume wizard progress
   saveState(id: string, wizard: unknown, name?: string): Promise<{ ok: boolean }> {
     return request<{ ok: boolean }>(`/api/session/${id}/state`, post({ wizard, name }));

@@ -50,6 +50,26 @@ export const db = {
     await env.DB.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`).bind(nowIso(), id).run();
   },
 
+  /** R2 keys of a project's raw imports (not project-prefixed, so look them up). */
+  async importRefs(env: Env, projectId: string): Promise<string[]> {
+    const res = await env.DB.prepare(`SELECT raw_ref FROM imports WHERE project_id = ?`)
+      .bind(projectId)
+      .all<{ raw_ref: string }>();
+    return (res.results ?? []).map((r) => r.raw_ref).filter(Boolean);
+  },
+
+  /** Delete all operational rows for a project. Audit log is preserved (§4.1). */
+  async deleteProjectData(env: Env, id: string): Promise<void> {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM targets WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM plans WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM imports WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM policy_packs WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM apply_runs WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM projects WHERE id = ?`).bind(id),
+    ]);
+  },
+
   async setProjectStatus(env: Env, id: string, status: string): Promise<void> {
     await env.DB.prepare(`UPDATE projects SET status = ?, updated_at = ? WHERE id = ?`)
       .bind(status, nowIso(), id)

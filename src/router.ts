@@ -95,6 +95,38 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
     return json({ id: projectId, name, vendor });
   }
 
+  // ---- DELETE /api/session/:id : discard & delete a session ----
+  const delMatch = path.match(/^\/api\/session\/([^/]+)$/);
+  if (delMatch && req.method === "DELETE") {
+    const sessionId = delMatch[1];
+    const project = await db.getProject(env, sessionId);
+    if (!project) return json({ ok: true }); // already gone — idempotent
+
+    // R2 cleanup: project-prefixed objects + the (non-prefixed) raw imports.
+    const prefixes = [
+      `backups/${sessionId}/`,
+      `bundles/${sessionId}/`,
+      `readbacks/${sessionId}/`,
+      `reports/${sessionId}/`,
+    ];
+    for (const prefix of prefixes) {
+      const listed = await env.R2.list({ prefix });
+      await Promise.all(listed.objects.map((o) => env.R2.delete(o.key)));
+    }
+    const importRefs = await db.importRefs(env, sessionId);
+    await Promise.all(importRefs.map((k) => env.R2.delete(k)));
+
+    // Wipe the Durable Object's persisted + in-memory state.
+    await doStub(env, sessionId)
+      .fetch(new Request("https://do/wipe", { method: "POST" }))
+      .catch(() => {});
+
+    // Delete D1 rows (audit log preserved), then record the deletion.
+    await db.deleteProjectData(env, sessionId);
+    await audit(env, { projectId: sessionId, actor: email, action: "session.delete" });
+    return json({ ok: true });
+  }
+
   // ---- /api/session/:id/<action...> ----
   const sessMatch = path.match(/^\/api\/session\/([^/]+)\/(.+)$/);
   if (sessMatch) {

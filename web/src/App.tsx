@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { StepBar, type StepDef } from "./components/StepBar";
 import { StatusBadge } from "./components/StatusBadge";
 import { api } from "./api";
@@ -247,6 +247,24 @@ export default function App() {
     }, 60);
   };
 
+  const deleteSession = async (id: string, e?: MouseEvent) => {
+    e?.stopPropagation();
+    if (
+      !window.confirm(
+        "Delete this session? This removes its plans, imports, backups and bundles, and cannot be undone. (The audit log is preserved.)",
+      )
+    ) {
+      return;
+    }
+    setSessions((list) => list.filter((s) => s.id !== id));
+    try {
+      await api.deleteSession(id);
+    } catch {
+      /* ignore — list already updated optimistically */
+    }
+    if (id === state.sessionId) newSession();
+  };
+
   const openSessions = async () => {
     const next = !sessionsOpen;
     setSessionsOpen(next);
@@ -364,14 +382,17 @@ export default function App() {
                       </li>
                     ) : (
                       sessions.map((s) => (
-                        <li key={s.id}>
+                        <li
+                          key={s.id}
+                          className={
+                            "flex items-stretch border-b border-ink-800 " +
+                            (s.id === state.sessionId ? "bg-accent-soft/20" : "")
+                          }
+                        >
                           <button
                             type="button"
                             onClick={() => loadSession(s.id)}
-                            className={
-                              "flex w-full flex-col items-start gap-0.5 border-b border-ink-800 px-3 py-2 text-left transition-colors hover:bg-ink-800/60 " +
-                              (s.id === state.sessionId ? "bg-accent-soft/20" : "")
-                            }
+                            className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2 text-left transition-colors hover:bg-ink-800/60"
                           >
                             <span className="flex w-full items-center justify-between gap-2">
                               <span className="truncate text-sm font-medium text-slate-100">
@@ -382,6 +403,23 @@ export default function App() {
                             <span className="font-mono text-[10px] text-ink-500">
                               {s.status} · {fmtWhen(s.updatedAt)}
                             </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => deleteSession(s.id, e)}
+                            title="Delete session"
+                            aria-label={`Delete session ${s.name}`}
+                            className="flex w-9 shrink-0 items-center justify-center text-ink-500 transition-colors hover:bg-bad/10 hover:text-bad"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                              <path
+                                d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"
+                                stroke="currentColor"
+                                strokeWidth="1.6"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
                           </button>
                         </li>
                       ))
