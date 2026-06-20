@@ -38,9 +38,14 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.transport]);
 
+  const deviceUrl = target.credentials.host
+    ? /^https?:\/\//i.test(target.credentials.host)
+      ? target.credentials.host
+      : `https://${target.credentials.host}`
+    : "https://<mgmt-ip>";
   const relayCmd =
     `node relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
-    `${state.sessionId ?? "<session-id>"} --device ${target.credentials.host || "https://<mgmt-ip>"}`;
+    `${state.sessionId ?? "<session-id>"} --device ${deviceUrl}`;
 
   const connected = state.conn?.ok === true;
 
