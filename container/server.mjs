@@ -16,10 +16,14 @@
  * container only reaches the single host the Worker tells it to, per request.
  */
 import { createServer } from "node:http";
+import { setGlobalDispatcher, Agent } from "undici";
 
 // Self-signed mgmt certs are the norm — this container exists precisely to talk
 // to them. (The Worker, which cannot do this, is what we're working around.)
+// Belt: the env var. Suspenders: an explicit undici dispatcher that disables
+// certificate verification for the global fetch (robust across runtimes).
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized: false } }));
 
 const PORT = Number(process.env.PORT || 8080);
 
@@ -78,8 +82,15 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: upstream.status, headers: outHeaders, body: text }));
   } catch (err) {
+    // undici hides the real reason under err.cause — surface it for diagnosis.
+    const cause = err?.cause;
+    const causeStr = cause
+      ? ` [cause: ${cause.code ?? ""} ${cause.message ?? cause}]`.replace(/\s+/g, " ").trim()
+      : "";
+    const message = `proxy fetch failed: ${err?.message ?? String(err)}${causeStr ? " " + causeStr : ""}`;
+    console.error(message, "->", url);
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: `proxy fetch failed: ${err?.message ?? String(err)}` }));
+    res.end(JSON.stringify({ error: message }));
   }
 });
 

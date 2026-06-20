@@ -3,6 +3,8 @@
 FROM node:22-alpine
 
 WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev
 COPY server.mjs ./
 
 # The Container class connects to defaultPort (8080).
