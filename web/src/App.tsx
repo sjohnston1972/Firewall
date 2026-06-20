@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StepBar, type StepDef } from "./components/StepBar";
 import { StatusBadge } from "./components/StatusBadge";
 import { VENDORS } from "./types";
@@ -104,10 +104,41 @@ function initialState(): WizardState {
   };
 }
 
+type Theme = "dark" | "light";
+
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document !== "undefined" && document.documentElement.classList.contains("theme-light")) {
+      return "light";
+    }
+    try {
+      return localStorage.getItem("bastion-theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("theme-light", theme === "light");
+    // Enable smooth colour transitions only after the first paint (avoids a
+    // flash-fade on load) by tagging the body once mounted.
+    document.body.classList.add("theme-transition");
+    try {
+      localStorage.setItem("bastion-theme", theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
+
+  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+}
+
 export default function App() {
   const [state, setState] = useState<WizardState>(initialState);
   const [current, setCurrent] = useState(0);
   const [furthest, setFurthest] = useState(0);
+  const [theme, toggleTheme] = useTheme();
 
   const patch = (next: Partial<WizardState>) =>
     setState((prev) => ({ ...prev, ...next }));
@@ -186,6 +217,7 @@ export default function App() {
             ) : (
               <StatusBadge tone="neutral">no session</StatusBadge>
             )}
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </div>
       </header>
@@ -218,6 +250,42 @@ export interface StepProps {
   onBack: () => void;
   step: number;
   total: number;
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const dark = theme === "dark";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
+      title={dark ? "Light theme" : "Dark theme"}
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-ink-700 bg-ink-900/60 text-ink-500 transition-colors hover:border-accent/50 hover:text-accent"
+    >
+      {dark ? (
+        // moon
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : (
+        // sun
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="4.2" stroke="currentColor" strokeWidth="1.7" />
+          <path
+            d="M12 2.5v2.2M12 19.3v2.2M21.5 12h-2.2M4.7 12H2.5M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6M18.7 18.7l-1.6-1.6M6.9 6.9 5.3 5.3"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 function BastionMark() {

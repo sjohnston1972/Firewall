@@ -19,12 +19,14 @@ export function Toggle({ checked, onChange, label, disabled, id }: ToggleProps) 
       className={
         "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors " +
         "disabled:opacity-40 focus-visible:outline-none " +
-        (checked ? "bg-accent" : "bg-ink-600")
+        (checked ? "bg-accent shadow-[0_0_12px_-2px_rgba(79,156,249,0.8)]" : "bg-ink-600")
       }
     >
       <span
         className={
-          "inline-block h-3.5 w-3.5 transform rounded-full bg-ink-950 shadow transition-transform " +
+          // Fixed near-white knob with a hairline ring so it reads on the accent
+          // track AND the off track in both light and dark themes.
+          "inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow ring-1 ring-black/10 transition-transform " +
           (checked ? "translate-x-[1.15rem]" : "translate-x-1")
         }
       />
@@ -47,16 +49,23 @@ export function ToggleCard({ title, description, checked, onChange, tag }: Toggl
       onClick={() => onChange(!checked)}
       aria-pressed={checked}
       className={
-        "group flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-all " +
+        "group flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-all duration-200 " +
         (checked
-          ? "border-accent/60 bg-accent-soft/30 shadow-[0_0_0_1px_rgba(79,156,249,0.25)]"
-          : "border-ink-700 bg-ink-900/50 hover:border-ink-600")
+          ? "border-accent bg-accent-soft/40 shadow-[0_0_0_1px_rgba(79,156,249,0.55),0_0_24px_-6px_rgba(79,156,249,0.65)]"
+          : "border-ink-700 bg-ink-900/50 hover:border-ink-600 hover:bg-ink-800/50")
       }
     >
       <Toggle checked={checked} onChange={onChange} />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-100">{title}</span>
+          <span
+            className={
+              "text-sm font-medium transition-colors " +
+              (checked ? "text-accent" : "text-slate-100")
+            }
+          >
+            {title}
+          </span>
           {tag && (
             <span className="eyebrow rounded bg-ink-700 px-1.5 py-0.5 text-ink-500">
               {tag}
