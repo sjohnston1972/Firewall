@@ -265,6 +265,21 @@ export default function App() {
     if (id === state.sessionId) newSession();
   };
 
+  const clearAllSessions = async () => {
+    if (!sessions.length) return;
+    if (
+      !window.confirm(
+        `Delete ALL ${sessions.length} session${sessions.length === 1 ? "" : "s"}? This removes every plan, import, backup and bundle and cannot be undone. (The audit log is preserved.)`,
+      )
+    ) {
+      return;
+    }
+    const ids = sessions.map((s) => s.id);
+    setSessions([]);
+    await Promise.all(ids.map((id) => api.deleteSession(id).catch(() => {})));
+    newSession();
+  };
+
   const openSessions = async () => {
     const next = !sessionsOpen;
     setSessionsOpen(next);
@@ -367,13 +382,24 @@ export default function App() {
                 <div className="absolute right-0 top-10 z-30 w-80 overflow-hidden rounded-lg border border-ink-700 bg-ink-900 shadow-xl">
                   <div className="flex items-center justify-between border-b border-ink-800 px-3 py-2">
                     <span className="eyebrow">Saved sessions</span>
-                    <button
-                      type="button"
-                      onClick={newSession}
-                      className="rounded border border-accent/40 bg-accent-soft/30 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
-                    >
-                      + New
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {sessions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={clearAllSessions}
+                          className="rounded border border-bad/40 bg-bad/5 px-2 py-0.5 text-[11px] font-medium text-bad hover:bg-bad/10"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={newSession}
+                        className="rounded border border-accent/40 bg-accent-soft/30 px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent-soft/50"
+                      >
+                        + New
+                      </button>
+                    </div>
                   </div>
                   <ul className="max-h-80 overflow-y-auto">
                     {sessions.length === 0 ? (
