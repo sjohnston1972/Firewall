@@ -44,7 +44,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
       : `https://${target.credentials.host}`
     : "https://<mgmt-ip>";
   const relayCmd =
-    `node relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
+    `node C:/cloudflare_projects/bastion/agent/relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
     `${state.sessionId ?? "<session-id>"} --device ${deviceUrl}`;
 
   const connected = state.conn?.ok === true;
@@ -260,6 +260,27 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
           {error && (
             <div className="mt-3 rounded-lg border border-bad/30 bg-bad/5 p-3 text-xs leading-relaxed text-bad">
               {error}
+            </div>
+          )}
+
+          {/* Connect-timeout = packets silently dropped, almost always source-IP
+              filtering (NSG / mgmt permitted-IPs). Point the user at the relay. */}
+          {error && /timeout/i.test(error) && target.transport !== "relay" && (
+            <div className="mt-2 rounded-lg border border-warn/30 bg-warn/5 p-3 text-xs leading-relaxed text-ink-500">
+              <span className="font-medium text-warn">Looks like a connect timeout.</span> The device
+              dropped the connection rather than refusing it — usually the target is{" "}
+              <span className="text-slate-200">source-IP filtered</span> (an Azure NSG or the firewall's
+              own management permitted-IP list) that allows your location but not
+              {target.transport === "container" ? " Cloudflare's container egress" : " this path"}.
+              Run the <span className="text-slate-200">Relay agent</span> on a host the device already
+              allows — it connects from that host's IP, so no allowlist change is needed.
+              <button
+                type="button"
+                onClick={() => setTransport("relay")}
+                className="ml-2 rounded border border-accent/40 bg-accent-soft/30 px-2 py-0.5 font-medium text-accent hover:bg-accent-soft/50"
+              >
+                Switch to Relay agent
+              </button>
             </div>
           )}
 
