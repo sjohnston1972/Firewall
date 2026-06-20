@@ -182,6 +182,44 @@ export class PanosDriver implements FirewallDriver {
       // tolerate — leave interfaces empty
     }
 
+    // Configured interfaces (config API). On freshly-built devices the ports
+    // exist in the config (and show in the GUI) but aren't yet instantiated in
+    // the dataplane, so `show interface all` returns 0. Read them from config and
+    // merge so discovery reflects what the GUI shows.
+    try {
+      const xml = await this.configGet("/config/devices/entry/network/interface");
+      const seen = new Set(interfaces.map((i) => i.name));
+      const ethSection =
+        PanosDriver.section(xml, "ethernet") +
+        PanosDriver.section(xml, "aggregate-ethernet");
+      // Find the opening tag of each physical/aggregate interface entry; the
+      // block runs until the next such opening (subinterface/ip entries nest
+      // inside and are skipped because their names don't match this pattern).
+      const openRe = /<entry\b[^>]*\bname="(ethernet[\d/]+|ae\d+)"[^>]*>/gi;
+      const opens: { name: string; openEnd: number; start: number }[] = [];
+      let om: RegExpExecArray | null;
+      while ((om = openRe.exec(ethSection)) !== null) {
+        opens.push({ name: om[1], openEnd: openRe.lastIndex, start: om.index });
+      }
+      for (let i = 0; i < opens.length; i++) {
+        const name = opens[i].name;
+        if (seen.has(name)) continue;
+        const blockEnd = i + 1 < opens.length ? opens[i + 1].start : ethSection.length;
+        const block = ethSection.slice(opens[i].openEnd, blockEnd);
+        const ip = PanosDriver.pick(block, /<ip>\s*<entry\b[^>]*\bname="([^"/]+\/\d+|[^"]+)"/i);
+        const disabled = /<disabled>yes<\/disabled>/i.test(block);
+        interfaces.push({
+          name,
+          enabled: !disabled,
+          address: ip && ip !== "" ? ip : undefined,
+          zone: undefined,
+        });
+        seen.add(name);
+      }
+    } catch {
+      // tolerate
+    }
+
     // Zones: prefer the configured zone list (covers zones with no live iface);
     // fall back to zones derived from the interface→zone mapping above.
     try {
