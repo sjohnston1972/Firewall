@@ -1213,18 +1213,22 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
       ir.zones.find((z) => z.type === "untrust")?.interfaces[0] ??
       ir.interfaces.find((i) => /^(ethernet|ae)/i.test(i.name) && !i.aggregateGroup)?.name ??
       "ethernet1/1";
-    // GlobalProtect's broker wants an interface-only local-address (an explicit
-    // <ip> breaks it); the interface must be in a zone and carry an IP.
-    const gpLocal = `<local-address><interface>${xmlEsc(wanIface)}</interface></local-address>`;
     const wanObj = ir.interfaces.find((i) => i.name === wanIface);
-    const wanHost = wanObj?.addressing.mode === "static" ? wanObj.addressing.address.split("/")[0] : "";
+    const wanCidr = wanObj?.addressing.mode === "static" ? wanObj.addressing.address : "";
+    // GP gateway local-address: explicit <ip><ipv4>CIDR</ipv4></ip> FIRST, then
+    // <interface> (verified against a working device config — interface-only or
+    // ip-after-interface make gp_broker report "no ipv4"/"local-address missing").
+    const gpGwLocal = `<local-address>${wanCidr ? `<ip><ipv4>${xmlEsc(wanCidr)}</ipv4></ip>` : ""}<interface>${xmlEsc(wanIface)}</interface></local-address>`;
+    // GP portal local-address: interface + empty <ip/> (auto).
+    const gpPortalLocal = `<local-address><interface>${xmlEsc(wanIface)}</interface><ip/></local-address>`;
     const s2s = ir.vpn.filter((v) => v.kind === "site-to-site" && v.peerAddress);
     const gp = ir.vpn.filter((v) => v.kind === "remote-access");
 
-    // Pre-assign a tunnel interface per VPN and create them FIRST, so the IPSec
-    // tunnels / GP gateways that reference them resolve.
+    // Only IPSec site-to-site needs a routed tunnel interface. GP gateways here
+    // use tunnel-mode "no" (verified to commit alongside IPSec), so they need no
+    // tunnel interface.
     const tif = new Map<string, string>();
-    [...s2s, ...gp].forEach((v, idx) => tif.set(v.name, `tunnel.${idx + 1}`));
+    s2s.forEach((v, idx) => tif.set(v.name, `tunnel.${idx + 1}`));
     if (tif.size) {
       const members = [...tif.values()].map((t) => `<member>${t}</member>`).join("");
       ops.push({
@@ -1291,21 +1295,18 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         element: `<entry name="bastion-gp-auth"><method><local-database/></method><allow-list><member>vpnuser</member></allow-list></entry>`,
       });
       for (const v of gp) {
-        const pool = v.clientIpPool || "192.168.100.1-192.168.100.50";
         ops.push({
           label: `GP gateway ${v.name}`,
           xpath: `${V}/global-protect/global-protect-gateway`,
-          element: `<entry name="${xmlEsc(v.name)}-gw"><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile>${gpLocal}<client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><tunnel-mode>yes</tunnel-mode><remote-user-tunnel-configs><entry name="default"><ip-pool><member>${xmlEsc(pool)}</member></ip-pool></entry></remote-user-tunnel-configs></entry>`,
+          element: `<entry name="${xmlEsc(v.name)}-gw"><roles><entry name="default"><login-lifetime><days>30</days></login-lifetime><inactivity-logout>180</inactivity-logout></entry></roles>${gpGwLocal}<gp-gw-dhcp><enable-dhcp>no</enable-dhcp></gp-gw-dhcp><client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile><tunnel-mode>no</tunnel-mode></entry>`,
         });
         // GP portal — portal-config requires local-address + custom-login-page +
         // custom-home-page (factory-default response pages). The per-client
-        // gateway list (client-config) is environment-specific and left for the
-        // engineer; the portal commits without it. wanHost is referenced for clarity.
-        void wanHost;
+        // gateway list (client-config) is environment-specific, left for the engineer.
         ops.push({
           label: `GP portal ${v.name}`,
           xpath: `${V}/global-protect/global-protect-portal`,
-          element: `<entry name="${xmlEsc(v.name)}-portal"><portal-config><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile>${gpLocal}<client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><custom-login-page>factory-default</custom-login-page><custom-home-page>factory-default</custom-home-page></portal-config></entry>`,
+          element: `<entry name="${xmlEsc(v.name)}-portal"><portal-config>${gpPortalLocal}<custom-login-page>factory-default</custom-login-page><custom-home-page>factory-default</custom-home-page><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile><client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth></portal-config></entry>`,
         });
       }
     }
