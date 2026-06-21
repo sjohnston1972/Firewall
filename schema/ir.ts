@@ -66,6 +66,15 @@ export const Interface = z.object({
   mtu: z.number().int().min(576).max(9216).optional(),
   /** LACP: this ethernet is a member of the named aggregate (ae<n>). */
   aggregateGroup: name.optional(),
+  /** DHCP server handed out on this interface's subnet (interface must be static). */
+  dhcpServer: z
+    .object({
+      poolStart: ipv4,
+      poolEnd: ipv4,
+      gateway: ipv4.optional(),
+      dns: z.array(ipv4).default([]),
+    })
+    .optional(),
 });
 export type Interface = z.infer<typeof Interface>;
 
@@ -178,6 +187,8 @@ export const VpnTunnel = z.object({
   phase2: IkeProposal.default({}),
   // PSK is NEVER stored in the IR/plan in plaintext — only a reference id.
   pskRef: z.string().optional(),
+  // remote-access (GlobalProtect): address pool handed to VPN clients.
+  clientIpPool: z.string().optional(),
   description: z.string().max(255).optional(),
 });
 export type VpnTunnel = z.infer<typeof VpnTunnel>;

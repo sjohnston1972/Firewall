@@ -126,6 +126,36 @@
                     "minLength": 1,
                     "maxLength": 63,
                     "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                  },
+                  "dhcpServer": {
+                    "type": "object",
+                    "properties": {
+                      "poolStart": {
+                        "type": "string",
+                        "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                      },
+                      "poolEnd": {
+                        "type": "string",
+                        "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                      },
+                      "gateway": {
+                        "type": "string",
+                        "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                      },
+                      "dns": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                        },
+                        "default": []
+                      }
+                    },
+                    "required": [
+                      "poolStart",
+                      "poolEnd"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -718,6 +748,9 @@
                     "default": {}
                   },
                   "pskRef": {
+                    "type": "string"
+                  },
+                  "clientIpPool": {
                     "type": "string"
                   },
                   "description": {
@@ -1353,6 +1386,9 @@
                     "default": {}
                   },
                   "pskRef": {
+                    "type": "string"
+                  },
+                  "clientIpPool": {
                     "type": "string"
                   },
                   "description": {

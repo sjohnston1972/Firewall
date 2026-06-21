@@ -155,13 +155,33 @@ export interface AggregateGroup {
   members: string[]; // ethernet interface names
 }
 
+/** DHCP server handed out on a static interface's subnet. */
+export interface DhcpServerDesign {
+  poolStart: string;
+  poolEnd: string;
+  gateway?: string;
+  dns?: string[];
+}
+
+/** A static route the engineer adds in the Design step. */
+export interface RouteDesign {
+  name: string;
+  destination: string; // CIDR, e.g. 172.16.12.0/24
+  nexthop?: string; // gateway IP
+  interface?: string;
+}
+
 export interface Design {
   hostname?: string;
   zones: ZoneDesign[];
   /** per-interface L3 addressing, keyed by interface name */
   interfaceAddrs?: Record<string, IfaceAddr>;
+  /** per-interface DHCP server, keyed by interface name */
+  interfaceDhcp?: Record<string, DhcpServerDesign>;
   /** LACP link-aggregation bundles (ae<n>) */
   aggregates?: AggregateGroup[];
+  /** static routes */
+  routes?: RouteDesign[];
   dns: string[];
   ntp: string[];
   timezone?: string;

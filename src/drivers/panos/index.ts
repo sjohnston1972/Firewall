@@ -284,12 +284,20 @@ export class PanosDriver implements FirewallDriver {
       nat.push(n);
     }
 
-    // VPN tunnels: the renderer only deploys NAT/ACL/objects/routes/hardening.
-    // Flag VPN so it's transparent they need peer/PSK/tunnel-interface to apply.
+    // VPN tunnels: deployed with strong-crypto baselines. Flag what's a
+    // placeholder so the engineer knows to change it.
     for (const v of ir.vpn) {
-      notes.push(
-        `VPN "${v.name}" (${v.kind}): not auto-deployed — provide peer address, PSK and a tunnel interface/zone to apply.`,
-      );
+      if (v.kind === "site-to-site" && !v.peerAddress) {
+        notes.push(`VPN "${v.name}": skipped — site-to-site needs a peer address.`);
+      } else if (v.kind === "site-to-site") {
+        notes.push(
+          `VPN "${v.name}": deployed with a PLACEHOLDER peer (${v.peerAddress}) and PSK — change both per site.`,
+        );
+      } else {
+        notes.push(
+          `VPN "${v.name}": GlobalProtect deployed with a self-signed cert + a placeholder local user (vpnuser / BastionGP-ChangeMe1!) — replace the cert and authentication before production.`,
+        );
+      }
     }
 
     return { ir: { ...ir, security, nat }, notes };
@@ -621,6 +629,32 @@ export class PanosDriver implements FirewallDriver {
     });
   }
 
+  /** Submit a commit AND poll the job to completion, returning the real result.
+   *  (Submitting alone returns a job id immediately; validation happens during
+   *  the job, so we must wait to know if it actually succeeded.) */
+  private async commitAndWait(): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+    const res = await this.commitConfig();
+    const jobId = PanosDriver.pick(res, /<job>([^<]+)<\/job>/i);
+    const cMsg = PanosDriver.pick(res, /<msg>([\s\S]*?)<\/msg>/i);
+    if (!jobId) {
+      if (cMsg && /no changes/i.test(cMsg)) return { ok: true };
+      return { ok: false, error: cMsg || "commit rejected" };
+    }
+    for (let i = 0; i < 45; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const js = await this.op(`<show><jobs><id>${jobId}</id></jobs></show>`);
+      if (/<status>\s*FIN\s*<\/status>/i.test(js)) {
+        const result = PanosDriver.pick(js, /<result>([^<]+)<\/result>/i);
+        if (result && result.toUpperCase() === "OK") return { ok: true, jobId };
+        const lines = [...js.matchAll(/<line>([\s\S]*?)<\/line>/g)]
+          .map((m) => m[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim())
+          .filter((l) => l && !/warning|deprecat/i.test(l));
+        return { ok: false, jobId, error: lines.slice(0, 3).join(" | ") || "commit failed validation" };
+      }
+    }
+    return { ok: false, jobId, error: "commit timed out" };
+  }
+
   async applyLive(plan: BuildPlan, opts?: ApplyOptions): Promise<ApplyResult> {
     const commit = opts?.commit !== false; // default: push + commit
     const messages: string[] = [];
@@ -634,28 +668,50 @@ export class PanosDriver implements FirewallDriver {
       const sani = await this.sanitizeForDevice(plan.ir);
       sani.notes.forEach((n) => messages.push(n));
 
-      // Push each config section via the config API (action=set). These land in
-      // the CANDIDATE config; the commit (if requested) promotes them to running.
-      const ops = renderPanosElements(sani.ir, dev);
-      if (ops.length === 0) {
+      const allOps = renderPanosElements(sani.ir, dev);
+      if (allOps.length === 0) {
         return { ok: false, committed: false, messages: ["Nothing to push — the plan is empty."] };
       }
-      for (const op of ops) {
-        const res = await this.configSet(op.xpath, op.element);
-        const status = PanosDriver.pick(res, /status="([^"]+)"/i);
-        if (!status || status.toLowerCase() !== "success") {
-          const msg = PanosDriver.pick(res, /<msg>([\s\S]*?)<\/msg>/i) ?? res.slice(0, 200);
-          return {
-            ok: false,
-            committed: false,
-            messages: [...messages, `Push of ${op.label} failed: ${msg}`],
-          };
+
+      // Commit in independent phases so one optional feature can never leave the
+      // core baseline uncommitted: core → IPSec → GlobalProtect. IPSec and GP are
+      // committed SEPARATELY and best-effort (GP, in particular, has brittle
+      // device-side requirements), so neither poisons the other or the baseline.
+      const isGp = (label: string) => /^GP /.test(label);
+      const isIpsec = (label: string) => /^(IKE |IPSec |VPN )/.test(label);
+      const coreOps = allOps.filter((o) => !isGp(o.label) && !isIpsec(o.label));
+      const ipsecOps = allOps.filter((o) => isIpsec(o.label));
+      const gpOps = allOps.filter((o) => isGp(o.label));
+
+      // Push a list of ops; returns the first failure (if any).
+      const push = async (list: typeof allOps): Promise<string | null> => {
+        for (const op of list) {
+          const res = await this.configSet(op.xpath, op.element);
+          const status = PanosDriver.pick(res, /status="([^"]+)"/i);
+          if (!status || status.toLowerCase() !== "success") {
+            const msg = PanosDriver.pick(res, /<msg>([\s\S]*?)<\/msg>/i) ?? res.slice(0, 200);
+            return `${op.label}: ${msg}`;
+          }
+          messages.push(`Pushed ${op.label}.`);
         }
-        messages.push(`Pushed ${op.label}.`);
+        return null;
+      };
+
+      // ---- core baseline ----
+      const coreFail = await push(coreOps);
+      if (coreFail) {
+        return { ok: false, committed: false, messages: [...messages, `Push failed — ${coreFail}`] };
       }
 
-      // Push-only mode: leave the candidate for the engineer to commit on-box.
+      // Push-only mode: stage everything (core + IPSec + GP), no commit.
       if (!commit) {
+        for (const [name, list] of [
+          ["IPSec", ipsecOps],
+          ["GlobalProtect", gpOps],
+        ] as const) {
+          const f = list.length ? await push(list) : null;
+          if (f) messages.push(`${name} section not staged — ${f}`);
+        }
         return {
           ok: true,
           committed: false,
@@ -666,32 +722,50 @@ export class PanosDriver implements FirewallDriver {
         };
       }
 
-      // Commit.
-      const commitRes = await this.commitConfig();
-      const cStatus = PanosDriver.pick(commitRes, /status="([^"]+)"/i);
-      const jobId = PanosDriver.pick(commitRes, /<job>([^<]+)<\/job>/i);
-      const cMsg = PanosDriver.pick(commitRes, /<msg>([\s\S]*?)<\/msg>/i);
-      // PAN returns a <job> id on accepted commits; "no changes" returns a msg, no job.
-      if (!jobId) {
-        if (cMsg && /no changes/i.test(cMsg)) {
-          return { ok: true, committed: true, messages: [...messages, "No changes to commit."] };
+      const core = await this.commitAndWait();
+      if (!core.ok) {
+        return {
+          ok: false,
+          committed: false,
+          jobId: core.jobId,
+          messages: [...messages, `Commit failed: ${core.error}`],
+        };
+      }
+      messages.push(`Baseline committed${core.jobId ? ` (job ${core.jobId})` : ""}.`);
+
+      // ---- IPSec phase (best-effort; baseline already committed) ----
+      if (ipsecOps.length) {
+        const f = await push(ipsecOps);
+        const r = f ? { ok: false, error: `push of ${f}` } : await this.commitAndWait();
+        messages.push(
+          r.ok
+            ? `IPSec VPN committed${r.jobId ? ` (job ${r.jobId})` : ""}.`
+            : `IPSec VPN not applied (baseline is committed) — ${r.error}. Complete it on the device.`,
+        );
+      }
+
+      // ---- GlobalProtect phase (best-effort) ----
+      if (gpOps.length) {
+        // GP needs a server certificate before its ssl-tls profile references it.
+        try {
+          await this.op(
+            `<request><certificate><generate><certificate-name>bastion-gp</certificate-name>` +
+              `<name>bastion-gp</name><algorithm><RSA><rsa-nbits>2048</rsa-nbits></RSA></algorithm>` +
+              `<digest>sha256</digest><ca>yes</ca></generate></certificate></request>`,
+          );
+        } catch {
+          /* non-fatal */
         }
-        return {
-          ok: false,
-          committed: false,
-          messages: [...messages, `Commit rejected${cMsg ? `: ${cMsg}` : ""}`],
-        };
+        const f = await push(gpOps);
+        const r = f ? { ok: false, error: `push of ${f}` } : await this.commitAndWait();
+        messages.push(
+          r.ok
+            ? `GlobalProtect committed${r.jobId ? ` (job ${r.jobId})` : ""}.`
+            : `GlobalProtect not applied (baseline is committed) — ${r.error}. Complete it on the device.`,
+        );
       }
-      if (cStatus && cStatus.toLowerCase() !== "success") {
-        return {
-          ok: false,
-          committed: false,
-          jobId,
-          messages: [...messages, `Commit rejected${cMsg ? `: ${cMsg}` : ""}`],
-        };
-      }
-      messages.push(`Commit submitted (job ${jobId}).`);
-      return { ok: true, committed: true, jobId, messages };
+
+      return { ok: true, committed: true, jobId: core.jobId, messages };
     } catch (err) {
       // Honest failure — never fabricate a successful apply.
       return {
@@ -777,6 +851,13 @@ function isIfaceRef(s: string): boolean {
 /** A literal interface name (ethernet1/1, ae1, tunnel.1…). */
 function isIfaceName(s: string): boolean {
   return /^(ethernet|ae|vlan|tunnel|loopback)[\d./]*$/i.test(s);
+}
+
+/** Convert a CIDR (10.0.0.1/24) to a dotted netmask (255.255.255.0). */
+function cidrToMask(cidr: string): string {
+  const bits = Number(cidr.split("/")[1] ?? 24);
+  const mask = bits >= 32 ? 0xffffffff : (0xffffffff << (32 - bits)) >>> 0;
+  return [24, 16, 8, 0].map((sh) => (mask >>> sh) & 0xff).join(".");
 }
 
 export interface PanosSetOp {
@@ -1079,6 +1160,123 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     })
     .join("");
   if (nat) ops.push({ label: "NAT rules", xpath: `${V}/rulebase/nat/rules`, element: nat });
+
+  // ----- DHCP server (per static interface) -----
+  const dhcp = ir.interfaces
+    .filter((i) => i.dhcpServer)
+    .map((i) => {
+      const s = i.dhcpServer!;
+      const mask =
+        i.addressing.mode === "static" ? cidrToMask(i.addressing.address) : "255.255.255.0";
+      const gw =
+        s.gateway ?? (i.addressing.mode === "static" ? i.addressing.address.split("/")[0] : "");
+      const dns = s.dns.length
+        ? `<dns><primary>${xmlEsc(s.dns[0])}</primary>${s.dns[1] ? `<secondary>${xmlEsc(s.dns[1])}</secondary>` : ""}</dns>`
+        : "";
+      return (
+        `<entry name="${xmlEsc(i.name)}"><server><mode>enabled</mode>` +
+        `<ip-pool><member>${xmlEsc(s.poolStart)}-${xmlEsc(s.poolEnd)}</member></ip-pool>` +
+        `<option><gateway>${xmlEsc(gw)}</gateway><subnet-mask>${mask}</subnet-mask>${dns}</option>` +
+        `</server></entry>`
+      );
+    })
+    .join("");
+  if (dhcp) ops.push({ label: "DHCP server", xpath: `${D}/network/dhcp/interface`, element: dhcp });
+
+  // ----- VPN: IPSec site-to-site + GlobalProtect remote-access -----
+  if (ir.vpn.length) {
+    const wanIface =
+      ir.zones.find((z) => z.type === "untrust")?.interfaces[0] ??
+      ir.interfaces.find((i) => /^(ethernet|ae)/i.test(i.name) && !i.aggregateGroup)?.name ??
+      "ethernet1/1";
+    // GlobalProtect's broker wants an interface-only local-address (an explicit
+    // <ip> breaks it); the interface must be in a zone and carry an IP.
+    const gpLocal = `<local-address><interface>${xmlEsc(wanIface)}</interface></local-address>`;
+    const s2s = ir.vpn.filter((v) => v.kind === "site-to-site" && v.peerAddress);
+    const gp = ir.vpn.filter((v) => v.kind === "remote-access");
+
+    // Pre-assign a tunnel interface per VPN and create them FIRST, so the IPSec
+    // tunnels / GP gateways that reference them resolve.
+    const tif = new Map<string, string>();
+    [...s2s, ...gp].forEach((v, idx) => tif.set(v.name, `tunnel.${idx + 1}`));
+    if (tif.size) {
+      const members = [...tif.values()].map((t) => `<member>${t}</member>`).join("");
+      ops.push({
+        label: "VPN tunnel interfaces",
+        xpath: `${D}/network/interface/tunnel/units`,
+        element: [...tif.values()].map((t) => `<entry name="${t}"/>`).join(""),
+      });
+      ops.push({
+        label: "VPN router binding",
+        xpath: `${D}/network/virtual-router`,
+        element: `<entry name="default"><interface>${members}</interface></entry>`,
+      });
+      ops.push({
+        label: "VPN zone",
+        xpath: `${V}/zone`,
+        element: `<entry name="vpn"><network><layer3>${members}</layer3></network></entry>`,
+      });
+    }
+
+    if (s2s.length) {
+      ops.push({
+        label: "IKE crypto profile",
+        xpath: `${D}/network/ike/crypto-profiles/ike-crypto-profiles`,
+        element: `<entry name="bastion-ike"><hash><member>sha256</member></hash><dh-group><member>group14</member></dh-group><encryption><member>aes-256-cbc</member></encryption><lifetime><hours>8</hours></lifetime></entry>`,
+      });
+      ops.push({
+        label: "IPSec crypto profile",
+        xpath: `${D}/network/ike/crypto-profiles/ipsec-crypto-profiles`,
+        element: `<entry name="bastion-ipsec"><esp><authentication><member>sha256</member></authentication><encryption><member>aes-256-cbc</member></encryption></esp><lifetime><hours>1</hours></lifetime></entry>`,
+      });
+    }
+    for (const v of s2s) {
+      const gwName = `${v.name}-gw`;
+      ops.push({
+        label: `IPSec gateway ${v.name}`,
+        xpath: `${D}/network/ike/gateway`,
+        element: `<entry name="${xmlEsc(gwName)}"><authentication><pre-shared-key><key>ChangeMeNow-${xmlEsc(v.name)}</key></pre-shared-key></authentication><protocol><ikev2><ike-crypto-profile>bastion-ike</ike-crypto-profile></ikev2><version>ikev2</version></protocol><local-address><interface>${xmlEsc(wanIface)}</interface></local-address><peer-address><ip>${xmlEsc(v.peerAddress!)}</ip></peer-address></entry>`,
+      });
+      ops.push({
+        label: `IPSec tunnel ${v.name}`,
+        xpath: `${D}/network/tunnel/ipsec`,
+        element: `<entry name="${xmlEsc(v.name)}"><auto-key><ike-gateway><entry name="${xmlEsc(gwName)}"/></ike-gateway><ipsec-crypto-profile>bastion-ipsec</ipsec-crypto-profile></auto-key><tunnel-interface>${tif.get(v.name)}</tunnel-interface></entry>`,
+      });
+    }
+    if (gp.length) {
+      // The certificate is generated as an op step in applyLive before these sets.
+      ops.push({
+        label: "GP ssl-tls profile",
+        xpath: `${V}/ssl-tls-service-profile`,
+        element: `<entry name="bastion-gp-ssl"><certificate>bastion-gp</certificate><protocol-settings><min-version>tls1-2</min-version></protocol-settings></entry>`,
+      });
+      // GlobalProtect requires a username source. Seed a placeholder local user
+      // (password "BastionGP-ChangeMe1!", a portable sha256-crypt hash) +
+      // local-database auth. The engineer replaces this with real auth/SSO.
+      ops.push({
+        label: "GP local user",
+        xpath: `${V}/local-user-database/user`,
+        element:
+          '<entry name="vpnuser"><phash>$5$wtsnpjga$C4hWHco.0dsfgn.JeNOm5IAxNlmGzMi/ZZnsUGQCsk4</phash></entry>',
+      });
+      ops.push({
+        label: "GP auth profile",
+        xpath: `${V}/authentication-profile`,
+        element: `<entry name="bastion-gp-auth"><method><local-database/></method><allow-list><member>vpnuser</member></allow-list></entry>`,
+      });
+      for (const v of gp) {
+        const pool = v.clientIpPool || "192.168.100.1-192.168.100.50";
+        ops.push({
+          label: `GP gateway ${v.name}`,
+          xpath: `${V}/global-protect/global-protect-gateway`,
+          element: `<entry name="${xmlEsc(v.name)}-gw"><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile>${gpLocal}<client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><tunnel-mode>yes</tunnel-mode><remote-user-tunnel-configs><entry name="default"><ip-pool><member>${xmlEsc(pool)}</member></ip-pool></entry></remote-user-tunnel-configs></entry>`,
+        });
+        // The GP portal (client-config distribution) carries many environment-
+        // specific required fields and a brittle broker check — left for the
+        // engineer to add on top of the committed gateway baseline.
+      }
+    }
+  }
 
   return ops;
 }

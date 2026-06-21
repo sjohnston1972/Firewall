@@ -384,6 +384,8 @@ const PACK_DEFS: PackDef[] = [
         {
           name: "s2s-baseline",
           kind: "site-to-site",
+          // Placeholder peer so a committable skeleton renders; change per site.
+          peerAddress: "203.0.113.50",
           localSubnets: [],
           remoteSubnets: [],
           ikeVersion: "ikev2",
@@ -416,6 +418,8 @@ const PACK_DEFS: PackDef[] = [
         {
           name: "ra-baseline",
           kind: "remote-access",
+          // GlobalProtect client address pool (change to fit your scheme).
+          clientIpPool: "192.168.100.1-192.168.100.50",
           localSubnets: [],
           remoteSubnets: [],
           ikeVersion: "ikev2",

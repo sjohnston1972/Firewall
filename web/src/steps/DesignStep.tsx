@@ -6,7 +6,7 @@ import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field } from "../components/Field";
 import { Button } from "../components/Button";
 import { StatusBadge } from "../components/StatusBadge";
-import type { IfaceMode, ZoneDesign } from "../types";
+import type { DhcpServerDesign, IfaceMode, ZoneDesign } from "../types";
 
 type ZoneType = ZoneDesign["type"];
 
@@ -152,9 +152,65 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
         {addr.mode === "none" && (
           <span className="text-[10px] text-ink-500">no IP — WAN needs DHCP/static for source-NAT</span>
         )}
+        {renderDhcp(name)}
       </div>
     );
   };
+
+  // ---- DHCP server (only on interfaces with a static IP) ----
+  const dhcpOf = (iface: string) => design.interfaceDhcp?.[iface];
+  const setDhcp = (iface: string, next: DhcpServerDesign | null) => {
+    const map = { ...(design.interfaceDhcp ?? {}) };
+    if (next) map[iface] = next;
+    else delete map[iface];
+    update({ interfaceDhcp: map });
+  };
+  const renderDhcp = (name: string) => {
+    const addr = addrOf(name);
+    const isStatic = addr.mode === "static" || (addr.mode === "config" && !!addr.address);
+    if (!isStatic) return null;
+    const dh = dhcpOf(name);
+    return (
+      <span className="flex items-center gap-1.5">
+        <label className="flex cursor-pointer items-center gap-1 text-[10px] text-ink-400">
+          <input
+            type="checkbox"
+            checked={!!dh}
+            onChange={(e) =>
+              setDhcp(name, e.target.checked ? { poolStart: "", poolEnd: "" } : null)
+            }
+          />
+          DHCP server
+        </label>
+        {dh && (
+          <>
+            <input
+              value={dh.poolStart}
+              onChange={(e) => setDhcp(name, { ...dh, poolStart: e.target.value.replace(/\s/g, "") })}
+              placeholder="pool start"
+              spellCheck={false}
+              className="w-24 rounded border border-ink-600 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+            />
+            <input
+              value={dh.poolEnd}
+              onChange={(e) => setDhcp(name, { ...dh, poolEnd: e.target.value.replace(/\s/g, "") })}
+              placeholder="pool end"
+              spellCheck={false}
+              className="w-24 rounded border border-ink-600 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+            />
+          </>
+        )}
+      </span>
+    );
+  };
+
+  // ---- static routes ----
+  const routes = design.routes ?? [];
+  const addRoute = () =>
+    update({ routes: [...routes, { name: `route${routes.length + 1}`, destination: "", nexthop: "" }] });
+  const updateRoute = (i: number, patchR: Partial<(typeof routes)[number]>) =>
+    update({ routes: routes.map((r, idx) => (idx === i ? { ...r, ...patchR } : r)) });
+  const removeRoute = (i: number) => update({ routes: routes.filter((_, idx) => idx !== i) });
 
   const listEditor =
     (key: "dns" | "ntp") =>
@@ -388,6 +444,66 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
                   </div>
                 );
               })}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          eyebrow="Routing"
+          title="Static routes"
+          description="Add static routes (e.g. reach an internal subnet via a next-hop gateway). Deployed under the default virtual-router."
+          action={
+            <Button variant="subtle" size="sm" onClick={addRoute}>
+              + Route
+            </Button>
+          }
+        />
+        <CardBody>
+          {routes.length === 0 ? (
+            <p className="text-sm text-ink-500">
+              No static routes. Add one to reach networks beyond a connected interface.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {routes.map((r, i) => (
+                <div
+                  key={i}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2"
+                >
+                  <input
+                    value={r.name}
+                    onChange={(e) => updateRoute(i, { name: e.target.value })}
+                    placeholder="name"
+                    spellCheck={false}
+                    className="w-28 rounded border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+                  />
+                  <input
+                    value={r.destination}
+                    onChange={(e) => updateRoute(i, { destination: e.target.value.replace(/\s/g, "") })}
+                    placeholder="dest CIDR (10.0.0.0/24)"
+                    spellCheck={false}
+                    className="flex-1 rounded border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+                  />
+                  <span className="font-mono text-[10px] text-ink-500">via</span>
+                  <input
+                    value={r.nexthop ?? ""}
+                    onChange={(e) => updateRoute(i, { nexthop: e.target.value.replace(/\s/g, "") })}
+                    placeholder="next-hop IP"
+                    spellCheck={false}
+                    className="w-32 rounded border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeRoute(i)}
+                    aria-label={`Remove route ${r.name}`}
+                    className="text-ink-500 transition-colors hover:text-bad"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </CardBody>

@@ -125,7 +125,17 @@ function mapDesign(
   // zone-assigned interfaces (standalone ethernets + ae bundles) — L3
   for (const [name, zone] of ifaceZone.entries()) {
     if (memberToAe.has(name)) continue; // a bundle member can't be an L3 zone iface
-    interfaces.push({ name, enabled: true, zone, addressing: resolveAddr(name, zone) });
+    const dh = design.interfaceDhcp?.[name];
+    const dhcpServer =
+      dh && dh.poolStart?.trim() && dh.poolEnd?.trim()
+        ? {
+            poolStart: dh.poolStart.trim(),
+            poolEnd: dh.poolEnd.trim(),
+            gateway: dh.gateway?.trim() || undefined,
+            dns: (dh.dns ?? []).map((d) => d.trim()).filter(Boolean),
+          }
+        : undefined;
+    interfaces.push({ name, enabled: true, zone, addressing: resolveAddr(name, zone), dhcpServer });
   }
   // LACP member ethernets — carry aggregate-group, no addressing/zone of their own
   for (const [member, aeName] of memberToAe.entries()) {
@@ -147,6 +157,14 @@ function mapDesign(
     },
     interfaces,
     zones: design.zones.map((z) => ({ name: z.name, type: z.type, interfaces: z.interfaces })),
+    routes: (design.routes ?? [])
+      .filter((r) => r.name?.trim() && r.destination?.trim())
+      .map((r) => ({
+        name: r.name.trim(),
+        destination: r.destination.trim(),
+        nexthop: r.nexthop?.trim() || undefined,
+        interface: r.interface?.trim() || undefined,
+      })),
     ngfw: ngfwProfiles,
     protection: protection ?? undefined,
   };
