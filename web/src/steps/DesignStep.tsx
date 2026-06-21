@@ -129,7 +129,7 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
           aria-label={`Addressing for ${name}`}
           className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-200 focus:border-accent focus:outline-none"
         >
-          <option value="config">From device config</option>
+          <option value="config">From import info</option>
           <option value="dhcp">DHCP</option>
           <option value="static">Static</option>
           <option value="none">No IP</option>
@@ -146,7 +146,7 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
         )}
         {addr.mode === "config" && (
           <span className="font-mono text-[10px] text-ink-500">
-            {disc ? `pulled from device: ${disc}` : "(none on device — WAN falls back to DHCP)"}
+            {disc ? `from import: ${disc}` : "(none imported — WAN falls back to DHCP)"}
           </span>
         )}
         {addr.mode === "none" && (
@@ -263,7 +263,7 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
         <CardHeader
           eyebrow="Interface mapping"
           title="Map interfaces to zones"
-          description="Assign each interface to a zone and set its addressing. Default pulls the IP discovered on the device. Bundle interfaces into a LACP aggregate (ae) with the Bundle control."
+          description="Assign each interface to a zone and set its addressing. Default uses the IP from import info. Bundle interfaces into a LACP aggregate (ae) with the Bundle control."
         />
         <CardBody>
           {ifaceNames.length === 0 && aggregates.length === 0 ? (
@@ -272,6 +272,50 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
             </p>
           ) : (
             <div className="space-y-2">
+              {aggregates.map((ag) => {
+                const assigned = zoneOf(ag.name);
+                return (
+                  <div key={ag.name} className="rounded-lg border border-accent/40 bg-ink-950 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-accent">
+                        {ag.name}{" "}
+                        <span className="text-[10px] text-ink-500">
+                          LACP · {ag.members.length} member{ag.members.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={assigned ?? ""}
+                          onChange={(e) => assignInterface(ag.name, e.target.value || null)}
+                          aria-label={`Zone for ${ag.name}`}
+                          disabled={design.zones.length === 0}
+                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
+                        >
+                          <option value="">unassigned</option>
+                          {design.zones.map((z) => (
+                            <option key={z.name} value={z.name}>
+                              {z.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => deleteBundle(ag.name)}
+                          aria-label={`Delete bundle ${ag.name}`}
+                          className="text-ink-500 transition-colors hover:text-bad"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-1 font-mono text-[10px] text-ink-500">
+                      {ag.members.join(", ") || "no members yet"}
+                    </div>
+                    {assigned && renderAddr(ag.name)}
+                  </div>
+                );
+              })}
+
               {ifaceNames.map((iface) => {
                 const bundle = bundleOf(iface);
                 if (bundle) {
@@ -341,50 +385,6 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
                       </div>
                     </div>
                     {assigned && renderAddr(iface)}
-                  </div>
-                );
-              })}
-
-              {aggregates.map((ag) => {
-                const assigned = zoneOf(ag.name);
-                return (
-                  <div key={ag.name} className="rounded-lg border border-accent/40 bg-ink-950 px-3 py-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-mono text-xs text-accent">
-                        {ag.name}{" "}
-                        <span className="text-[10px] text-ink-500">
-                          LACP · {ag.members.length} member{ag.members.length === 1 ? "" : "s"}
-                        </span>
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={assigned ?? ""}
-                          onChange={(e) => assignInterface(ag.name, e.target.value || null)}
-                          aria-label={`Zone for ${ag.name}`}
-                          disabled={design.zones.length === 0}
-                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
-                        >
-                          <option value="">unassigned</option>
-                          {design.zones.map((z) => (
-                            <option key={z.name} value={z.name}>
-                              {z.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => deleteBundle(ag.name)}
-                          aria-label={`Delete bundle ${ag.name}`}
-                          className="text-ink-500 transition-colors hover:text-bad"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                    <div className="mt-1 font-mono text-[10px] text-ink-500">
-                      {ag.members.join(", ") || "no members yet"}
-                    </div>
-                    {assigned && renderAddr(ag.name)}
                   </div>
                 );
               })}
