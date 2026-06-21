@@ -657,6 +657,19 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     ops.push({ label: "interfaces", xpath: `${D}/network/interface/ethernet`, element: eth });
   }
 
+  // Default virtual-router — L3 interfaces are useless without one (commit warns
+  // "interface has no virtual-router"). Bind every ethernet interface we configure
+  // to a "default" VR. action=set merges, so an existing "default" VR is reused.
+  const ethL3 = ir.interfaces.filter((i) => /^ethernet/i.test(i.name)).map((i) => i.name);
+  if (ethL3.length) {
+    const vrMembers = ethL3.map((n) => `<member>${xmlEsc(n)}</member>`).join("");
+    ops.push({
+      label: "virtual-router (default)",
+      xpath: `${D}/network/virtual-router`,
+      element: `<entry name="default"><interface>${vrMembers}</interface></entry>`,
+    });
+  }
+
   // ----- address objects -----
   const addr = ir.addresses
     .map((a) => {
