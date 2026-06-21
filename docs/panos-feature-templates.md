@@ -145,3 +145,45 @@ ${V}/rulebase/tunnel-inspect/rules
 ${V}/profiles/dos-protection   -> <entry name="dos1"><type>aggregate</type><flood><tcp-syn><enable>yes</enable></tcp-syn></flood></entry>
 ${V}/rulebase/dos/rules        -> <entry name="dosrule1"><from><zone><member>untrust</member></zone></from>...<action><protect/></action><protection><aggregate><profile>dos1</profile></aggregate></protection></entry>
 ```
+
+---
+
+## Hardening + NGFW (verified committed on PA-VM 11.2; now in the live renderer)
+
+These are emitted by `renderPanosElements` automatically for every project.
+
+**NGFW — baked into every allow rule.** A profile-group `bastion-ngfw` is built
+from the IR's NGFW toggles (defaults to a baseline when none set) using PAN
+predefined profiles, and attached to each `allow` rule via `<profile-setting>`:
+```
+${V}/profile-group  ->  <entry name="bastion-ngfw">
+  <virus><member>default</member></virus>            (antiMalware)
+  <spyware><member>strict</member></spyware>         (dnsSecurity / anti-spyware)
+  <vulnerability><member>strict</member></vulnerability>  (ips)
+  <url-filtering><member>default</member></url-filtering>  (urlFiltering)
+  <wildfire-analysis><member>default</member></wildfire-analysis>  (sandboxing)
+</entry>
+# each allow rule: <profile-setting><group><member>bastion-ngfw</member></group></profile-setting>
+```
+
+**Management-plane hardening** (`system.management`):
+```
+${D}/deviceconfig/system/service       -> <disable-telnet>yes</disable-telnet><disable-http>yes</disable-http><disable-https>no</disable-https><disable-ssh>no</disable-ssh>
+${D}/deviceconfig/system/permitted-ip  -> <entry name="10.0.0.0/8"/> ...   (CAUTION: must include the mgmt source)
+${D}/deviceconfig/setting/management   -> <admin-lockout><failed-attempts>5</failed-attempts><lockout-time>30</lockout-time></admin-lockout>
+```
+
+**Zone protection** (`protection`) — profile attached to zones:
+```
+${D}/network/profiles/zone-protection-profile -> <entry name="bastion-zp">
+  <flood><tcp-syn><enable>yes</enable></tcp-syn><udp><enable>yes</enable></udp><icmp><enable>yes</enable></icmp><icmpv6><enable>yes</enable></icmpv6><other-ip><enable>yes</enable></other-ip></flood>
+  <discard-overlapping-tcp-segment-mismatch>yes</discard-overlapping-tcp-segment-mismatch><discard-malformed-option>yes</discard-malformed-option>
+</entry>
+# zone network: <zone-protection-profile>bastion-zp</zone-protection-profile>
+```
+Notes: reconnaissance (`scan`) section has a finicky schema — shipped flood +
+packet-based (covers floodProtection + packetBasedAttackProtection). TLS
+decryption needs an imported forward-trust certificate (like GlobalProtect), so
+it's not auto-rendered. App-IDs and zone references are validated against the
+device on apply; invalid ones are mapped or skipped with a flag rather than
+failing the commit.
