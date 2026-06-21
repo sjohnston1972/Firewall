@@ -773,6 +773,32 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     ops.push({ label: "system", xpath: `${D}/deviceconfig/system`, element: sysParts.join("") });
   }
 
+  // ----- management-plane hardening -----
+  const mgmt = sys.management;
+  ops.push({
+    label: "mgmt service hardening",
+    xpath: `${D}/deviceconfig/system/service`,
+    element:
+      `<disable-telnet>${mgmt.telnet ? "no" : "yes"}</disable-telnet>` +
+      `<disable-http>${mgmt.httpPlain ? "no" : "yes"}</disable-http>` +
+      `<disable-https>${mgmt.https ? "no" : "yes"}</disable-https>` +
+      `<disable-ssh>${mgmt.ssh ? "no" : "yes"}</disable-ssh>`,
+  });
+  if (mgmt.allowedSources.length) {
+    ops.push({
+      label: "mgmt permitted-ip",
+      xpath: `${D}/deviceconfig/system/permitted-ip`,
+      element: mgmt.allowedSources.map((s) => `<entry name="${xmlEsc(s)}"/>`).join(""),
+    });
+  }
+  if (mgmt.lockoutThreshold > 0) {
+    ops.push({
+      label: "admin lockout",
+      xpath: `${D}/deviceconfig/setting/management`,
+      element: `<admin-lockout><failed-attempts>${mgmt.lockoutThreshold}</failed-attempts><lockout-time>30</lockout-time></admin-lockout>`,
+    });
+  }
+
   // ----- interfaces (ethernet, layer3) -----
   const eth = ir.interfaces
     .filter((i) => /^ethernet/i.test(i.name))
@@ -826,18 +852,78 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     .join("");
   if (svc) ops.push({ label: "service objects", xpath: `${V}/service`, element: svc });
 
-  // ----- zones -----
+  // ----- zone-protection profile (flood + packet-based; attached to zones) -----
+  const prot = ir.protection;
+  const zpParts: string[] = [];
+  if (prot.floodProtection) {
+    zpParts.push(
+      "<flood>" +
+        "<tcp-syn><enable>yes</enable></tcp-syn>" +
+        "<udp><enable>yes</enable></udp>" +
+        "<icmp><enable>yes</enable></icmp>" +
+        "<icmpv6><enable>yes</enable></icmpv6>" +
+        "<other-ip><enable>yes</enable></other-ip>" +
+        "</flood>",
+    );
+  }
+  if (prot.packetBasedAttackProtection) {
+    zpParts.push(
+      "<discard-overlapping-tcp-segment-mismatch>yes</discard-overlapping-tcp-segment-mismatch>" +
+        "<discard-malformed-option>yes</discard-malformed-option>",
+    );
+  }
+  const ZP_NAME = zpParts.length ? "bastion-zp" : "";
+  if (ZP_NAME) {
+    ops.push({
+      label: "zone-protection profile",
+      xpath: `${D}/network/profiles/zone-protection-profile`,
+      element: `<entry name="${ZP_NAME}">${zpParts.join("")}</entry>`,
+    });
+  }
+
+  // ----- zones (zone-protection profile attached when enabled) -----
+  const zpRef = ZP_NAME ? `<zone-protection-profile>${ZP_NAME}</zone-protection-profile>` : "";
   const zones = ir.zones
     .map(
       (z) =>
         `<entry name="${xmlEsc(z.name)}"><network><layer3>${z.interfaces
           .map((m) => `<member>${xmlEsc(m)}</member>`)
-          .join("")}</layer3></network></entry>`,
+          .join("")}</layer3>${zpRef}</network></entry>`,
     )
     .join("");
   if (zones) ops.push({ label: "zones", xpath: `${V}/zone`, element: zones });
 
-  // ----- security rules -----
+  // ----- NGFW security-profile group, baked into every allow rule -----
+  // Maps the IR's NGFW toggles to PAN's predefined profiles; if no NGFW config
+  // is present we still apply a sensible baseline so allowed traffic is always
+  // inspected. Uses predefined "default"/"strict" profiles (verified on device).
+  const ng = ir.ngfw[0];
+  const ngfwMembers: string[] = [];
+  if (ng) {
+    if (ng.antiMalware) ngfwMembers.push("<virus><member>default</member></virus>");
+    if (ng.dnsSecurity) ngfwMembers.push("<spyware><member>strict</member></spyware>");
+    if (ng.ips) ngfwMembers.push("<vulnerability><member>strict</member></vulnerability>");
+    if (ng.urlFiltering) ngfwMembers.push("<url-filtering><member>default</member></url-filtering>");
+    if (ng.sandboxing) ngfwMembers.push("<wildfire-analysis><member>default</member></wildfire-analysis>");
+  } else {
+    // No explicit NGFW config → bake in a baseline.
+    ngfwMembers.push(
+      "<virus><member>default</member></virus>",
+      "<spyware><member>strict</member></spyware>",
+      "<vulnerability><member>strict</member></vulnerability>",
+      "<url-filtering><member>default</member></url-filtering>",
+    );
+  }
+  const NGFW_GROUP = ngfwMembers.length ? "bastion-ngfw" : "";
+  if (NGFW_GROUP) {
+    ops.push({
+      label: "NGFW profile group",
+      xpath: `${V}/profile-group`,
+      element: `<entry name="${NGFW_GROUP}">${ngfwMembers.join("")}</entry>`,
+    });
+  }
+
+  // ----- security rules (allow rules get the NGFW group attached) -----
   const sec = ir.security
     .map((r) => {
       const action = r.action === "reject" ? "reset-client" : r.action; // allow|deny|drop
@@ -845,6 +931,11 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         r.services.length && !(r.services.length === 1 && r.services[0] === "any")
           ? members(r.services)
           : "<member>application-default</member>";
+      // NGFW profiles only inspect permitted traffic, so attach to allow rules.
+      const profile =
+        action === "allow" && NGFW_GROUP
+          ? `<profile-setting><group><member>${NGFW_GROUP}</member></group></profile-setting>`
+          : "";
       return (
         `<entry name="${xmlEsc(r.name)}">` +
         `<from>${members(r.sourceZones)}</from>` +
@@ -854,6 +945,7 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         `<application>${members(r.applications.map(aliasApp))}</application>` +
         `<service>${svcMembers}</service>` +
         `<action>${action}</action>` +
+        profile +
         `<log-end>${r.log ? "yes" : "no"}</log-end>` +
         (r.disabled ? "<disabled>yes</disabled>" : "") +
         `</entry>`
@@ -1009,23 +1101,20 @@ function renderPanosSet(ir: IR): string {
     lines.push(`set service ${q(svc.name)} protocol ${svc.protocol} port ${portSpec}`);
   }
 
-  // ----- NGFW profile groups (security profiles) -----
+  // ----- NGFW security-profile group (baked into every allow rule) -----
   lines.push("");
   lines.push("# --- NGFW security profiles ---");
-  for (const p of ir.ngfw) {
-    // PAN-OS uses individual profiles; here we register a profile-group name
-    // referencing built-in best-practice profiles where enabled.
-    const parts: string[] = [];
-    if (p.ips) parts.push("virus default-and-spyware");
-    if (p.antiMalware) parts.push("spyware default");
-    if (p.urlFiltering) parts.push("url-filtering default");
-    if (p.dnsSecurity) parts.push("spyware dns-security");
-    lines.push(
-      `# profile-group ${q(p.name)}: ${parts.length ? parts.join(", ") : "no profiles enabled"}`,
-    );
-    if (p.ips) lines.push(`set profile-group ${q(p.name)} vulnerability default`);
-    if (p.antiMalware) lines.push(`set profile-group ${q(p.name)} virus default`);
-    if (p.urlFiltering) lines.push(`set profile-group ${q(p.name)} url-filtering default`);
+  const sng = ir.ngfw[0];
+  const sgParts: string[] = [];
+  if (sng ? sng.antiMalware : true) sgParts.push("virus default");
+  if (sng ? sng.dnsSecurity : true) sgParts.push("spyware strict");
+  if (sng ? sng.ips : true) sgParts.push("vulnerability strict");
+  if (sng ? sng.urlFiltering : true) sgParts.push("url-filtering default");
+  if (sng && sng.sandboxing) sgParts.push("wildfire-analysis default");
+  const STAGED_NGFW = sgParts.length ? "bastion-ngfw" : "";
+  for (const pg of sgParts) {
+    const [type, val] = pg.split(" ");
+    lines.push(`set profile-group ${STAGED_NGFW} ${type} ${val}`);
   }
 
   // ----- security rules -----
@@ -1051,7 +1140,9 @@ function renderPanosSet(ir: IR): string {
     lines.push(`${base} action ${action}`);
     lines.push(`${base} log-end ${rule.log ? "yes" : "no"}`);
     if (rule.disabled) lines.push(`${base} disabled yes`);
-    for (const prof of rule.profiles) {
+    // Bake the NGFW profile group into allow rules (profiles inspect permitted traffic).
+    const profs = action === "allow" && STAGED_NGFW ? [STAGED_NGFW] : rule.profiles;
+    for (const prof of profs) {
       lines.push(`${base} profile-setting group ${q(prof)}`);
     }
     if (rule.description) lines.push(`${base} description ${q(rule.description)}`);
