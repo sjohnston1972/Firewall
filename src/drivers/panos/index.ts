@@ -219,11 +219,26 @@ export class PanosDriver implements FirewallDriver {
     return { apps: out.length ? [...new Set(out)] : ["any"], dropped };
   }
 
-  /** Replace each security rule's applications with device-valid App-IDs. */
-  private async sanitizeApplications(ir: IR): Promise<{ ir: IR; notes: string[] }> {
+  /**
+   * Make an IR safe to commit on this device:
+   *  - skip security/NAT rules that reference a zone not defined in the plan
+   *    (so e.g. a guest-isolation pack without a guest zone still commits);
+   *  - map/validate each rule's L7 applications to real App-IDs, dropping unknowns.
+   * Everything skipped/changed is surfaced in `notes`.
+   */
+  private async sanitizeForDevice(ir: IR): Promise<{ ir: IR; notes: string[] }> {
     const notes: string[] = [];
+    const zoneSet = new Set<string>([...ir.zones.map((z) => z.name), "any"]);
+
     const security = [];
     for (const r of ir.security) {
+      const badZones = [...new Set([...r.sourceZones, ...r.destZones])].filter(
+        (z) => !zoneSet.has(z),
+      );
+      if (badZones.length) {
+        notes.push(`Rule "${r.name}": skipped — undefined zone(s) ${badZones.join(", ")}.`);
+        continue;
+      }
       if (!r.applications?.length) {
         security.push(r);
         continue;
@@ -236,7 +251,20 @@ export class PanosDriver implements FirewallDriver {
       }
       security.push({ ...r, applications: apps });
     }
-    return { ir: { ...ir, security }, notes };
+
+    const nat = [];
+    for (const n of ir.nat) {
+      const badZones = [n.sourceZone, n.destZone].filter(
+        (z): z is string => !!z && !zoneSet.has(z),
+      );
+      if (badZones.length) {
+        notes.push(`NAT "${n.name}": skipped — undefined zone(s) ${badZones.join(", ")}.`);
+        continue;
+      }
+      nat.push(n);
+    }
+
+    return { ir: { ...ir, security, nat }, notes };
   }
 
   /** Commit the candidate config. Returns the raw XML (job id / status). */
@@ -504,10 +532,10 @@ export class PanosDriver implements FirewallDriver {
     // Security rules must reference zones that exist.
     for (const rule of ir.security) {
       for (const z of [...rule.sourceZones, ...rule.destZones]) {
-        if (!zoneNames.has(z)) {
+        if (z !== "any" && !zoneNames.has(z)) {
           findings.push({
-            severity: "error",
-            message: `Security rule "${rule.name}" references zone "${z}" that does not exist.`,
+            severity: "warn",
+            message: `Security rule "${rule.name}" references zone "${z}" not in the plan — it will be skipped on apply.`,
           });
         }
       }
@@ -572,9 +600,10 @@ export class PanosDriver implements FirewallDriver {
       await this.ensureApiKey();
       const dev = await this.deviceName();
 
-      // Validate/repair L7 App-IDs against the device before pushing — the AI's
-      // app names are intent, not gospel (e.g. "office365" -> "ms-office365-base").
-      const sani = await this.sanitizeApplications(plan.ir);
+      // Make the IR safe to commit: drop rules with undefined zones, and
+      // validate/repair L7 App-IDs against the device (the AI's app names are
+      // intent, not gospel — e.g. "office365" -> "ms-office365-base").
+      const sani = await this.sanitizeForDevice(plan.ir);
       sani.notes.forEach((n) => messages.push(n));
 
       // Push each config section via the config API (action=set). These land in

@@ -62,6 +62,10 @@ const SVC_SYSLOG_UDP = svc("svc-syslog-udp", "udp", [514]);
 const SVC_SYSLOG_TCP = svc("svc-syslog-tcp", "tcp", [6514]);
 const SVC_OCSP = SVC_HTTP; // OCSP/CRL ride over HTTP
 
+// High-risk source countries (ISO-3166 alpha-2). Firewalls match geo by country
+// code directly in the rule source — verified accepted by PAN-OS.
+const GEO_HIGH_RISK = ["KP", "RU", "IR", "SY", "CU"];
+
 // well-known public DoH resolver endpoints (sample set; real builds refresh).
 const DOH_PROVIDERS: AddressObject[] = [
   { name: "doh-cloudflare", value: "1.1.1.1", kind: "host" },
@@ -271,19 +275,20 @@ const PACK_DEFS: PackDef[] = [
           action: "drop",
           sourceZones: ["untrust"],
           destZones: ["trust", "dmz"],
-          sources: ["geoip:high-risk"],
+          // Vendor firewalls match geo by ISO-3166 country code directly in the
+          // source field (verified accepted by PAN-OS). Not a placeholder string.
+          sources: GEO_HIGH_RISK,
           destinations: ["any"],
           services: ["any"],
           applications: [],
           log: true,
           disabled: false,
           profiles: [],
-          description: "Drop inbound from high-risk geographies (see protection.geoBlock).",
+          description: "Drop inbound from high-risk source countries.",
         },
       ],
       scalars: (ir) => {
-        // Sample high-risk ISO-3166 alpha-2 set; engineer can adjust.
-        ir.protection.geoBlock = ["KP", "RU", "IR", "SY", "CU"];
+        ir.protection.geoBlock = GEO_HIGH_RISK;
       },
     }),
   },
@@ -294,7 +299,7 @@ const PACK_DEFS: PackDef[] = [
     category: "security",
     build: () => ({
       addresses: DOH_PROVIDERS,
-      services: [SVC_DOT],
+      services: [SVC_HTTPS, SVC_DOT],
       security: [
         {
           name: "block-rogue-doh",
