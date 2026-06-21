@@ -171,10 +171,13 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [saved, setSaved] = useState(false);
 
-  const sessionName = useMemo(
-    () => state.design.hostname?.trim() || `${vendorMeta.label} onboarding`,
-    [state.design.hostname, vendorMeta.label],
-  );
+  // Distinct, recognisable name so sessions aren't all "Palo Alto onboarding".
+  const sessionName = useMemo(() => {
+    const host = state.design.hostname?.trim();
+    if (host) return host;
+    const sid = state.sessionId ? ` · ${state.sessionId.slice(4, 10)}` : "";
+    return `${vendorMeta.label}${sid}`;
+  }, [state.design.hostname, vendorMeta.label, state.sessionId]);
 
   // Remember the active session so a refresh can resume it.
   useEffect(() => {
@@ -247,6 +250,15 @@ export default function App() {
     }, 60);
   };
 
+  const refreshSessions = async () => {
+    try {
+      const r = await api.listSessions();
+      setSessions(r.sessions);
+    } catch {
+      /* leave list as-is */
+    }
+  };
+
   const deleteSession = async (id: string, e?: MouseEvent) => {
     e?.stopPropagation();
     if (
@@ -256,13 +268,14 @@ export default function App() {
     ) {
       return;
     }
-    setSessions((list) => list.filter((s) => s.id !== id));
+    setSessions((list) => list.filter((s) => s.id !== id)); // immediate feedback
     try {
       await api.deleteSession(id);
     } catch {
-      /* ignore — list already updated optimistically */
+      /* fall through to a server refresh so the UI shows the real state */
     }
     if (id === state.sessionId) newSession();
+    await refreshSessions(); // reconcile with server truth (delete really stuck?)
   };
 
   const clearAllSessions = async () => {
@@ -278,6 +291,7 @@ export default function App() {
     setSessions([]);
     await Promise.all(ids.map((id) => api.deleteSession(id).catch(() => {})));
     newSession();
+    await refreshSessions(); // reconcile with server truth
   };
 
   const openSessions = async () => {
@@ -427,7 +441,7 @@ export default function App() {
                               <span className="eyebrow shrink-0">{s.vendor}</span>
                             </span>
                             <span className="font-mono text-[10px] text-ink-500">
-                              {s.status} · {fmtWhen(s.updatedAt)}
+                              {s.id.slice(4, 10)} · {s.status} · {fmtWhen(s.updatedAt)}
                             </span>
                           </button>
                           <button
