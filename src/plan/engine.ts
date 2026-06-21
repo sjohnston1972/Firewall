@@ -66,6 +66,7 @@ export function buildPlan(input: PlanInput): IR {
     nat: d.nat ?? [],
     security: d.security ?? [],
     vpn: d.vpn ?? [],
+    routes: d.routes ?? [],
     ngfw: d.ngfw ?? [],
     protection: d.protection ?? {},
   });
@@ -79,6 +80,7 @@ export function buildPlan(input: PlanInput): IR {
   base.nat = mergeByName(base.nat, frags.flatMap((f) => f.nat));
   base.security = mergeByName(base.security, frags.flatMap((f) => f.security));
   base.vpn = mergeByName(base.vpn, frags.flatMap((f) => f.vpn));
+  base.routes = mergeByName(base.routes, frags.flatMap((f) => f.routes));
 
   // Apply policy packs last; applyPacks is itself idempotent + returns a new IR.
   const withPacks = applyPacks(base, input.enabledPacks);
@@ -159,6 +161,7 @@ export function diffIR(before: IR | null, after: IR): PlanDiff {
   sections.nat = diffNamed("nat", empty.nat, after.nat, acc);
   sections.security = diffNamed("security", empty.security, after.security, acc);
   sections.vpn = diffNamed("vpn", empty.vpn, after.vpn, acc);
+  sections.routes = diffNamed("routes", empty.routes, after.routes, acc);
   sections.ngfw = diffNamed("ngfw", empty.ngfw, after.ngfw, acc);
 
   // For a brand-new build, treat scalars as "added" if non-default presence is

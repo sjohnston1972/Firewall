@@ -252,6 +252,11 @@ export class PanosDriver implements FirewallDriver {
       security.push({ ...r, applications: apps });
     }
 
+    const zoneIface = new Map<string, string>();
+    for (const z of ir.zones) if (z.interfaces[0]) zoneIface.set(z.name, z.interfaces[0]);
+    const ifaceHasIp = new Map<string, boolean>();
+    for (const i of ir.interfaces) ifaceHasIp.set(i.name, i.addressing.mode !== "none");
+
     const nat = [];
     for (const n of ir.nat) {
       const badZones = [n.sourceZone, n.destZone].filter(
@@ -261,7 +266,30 @@ export class PanosDriver implements FirewallDriver {
         notes.push(`NAT "${n.name}": skipped — undefined zone(s) ${badZones.join(", ")}.`);
         continue;
       }
+      // Interface-based source-NAT needs the egress interface to carry an IP, or
+      // the commit fails ("interface has no IP for source translation").
+      if (n.type === "source" && n.translatedSource && isIfaceRef(n.translatedSource)) {
+        const egress = isIfaceName(n.translatedSource)
+          ? n.translatedSource
+          : n.destZone
+            ? zoneIface.get(n.destZone)
+            : undefined;
+        if (egress && ifaceHasIp.get(egress) === false) {
+          notes.push(
+            `NAT "${n.name}": skipped — egress interface ${egress} has no IP. Set DHCP or a static IP on the WAN (Design) to enable source-NAT.`,
+          );
+          continue;
+        }
+      }
       nat.push(n);
+    }
+
+    // VPN tunnels: the renderer only deploys NAT/ACL/objects/routes/hardening.
+    // Flag VPN so it's transparent they need peer/PSK/tunnel-interface to apply.
+    for (const v of ir.vpn) {
+      notes.push(
+        `VPN "${v.name}" (${v.kind}): not auto-deployed — provide peer address, PSK and a tunnel interface/zone to apply.`,
+      );
     }
 
     return { ir: { ...ir, security, nat }, notes };
@@ -738,6 +766,19 @@ function aliasApp(name: string): string {
   return APP_ALIASES[name.toLowerCase().trim()] ?? name.toLowerCase().trim();
 }
 
+/** Does this translated-source value mean "the egress interface address"? */
+function isIfaceRef(s: string): boolean {
+  return (
+    s.toLowerCase() === "interface" ||
+    /interface/i.test(s) ||
+    /^(ethernet|ae|vlan|tunnel|loopback)[\d./]*$/i.test(s)
+  );
+}
+/** A literal interface name (ethernet1/1, ae1, tunnel.1…). */
+function isIfaceName(s: string): boolean {
+  return /^(ethernet|ae|vlan|tunnel|loopback)[\d./]*$/i.test(s);
+}
+
 export interface PanosSetOp {
   label: string;
   xpath: string;
@@ -827,6 +868,23 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
       label: "virtual-router (default)",
       xpath: `${D}/network/virtual-router`,
       element: `<entry name="default"><interface>${vrMembers}</interface></entry>`,
+    });
+  }
+
+  // ----- static routes (under the default VR) -----
+  const routes = ir.routes
+    .map((r) => {
+      const nh = r.nexthop ? `<nexthop><ip-address>${xmlEsc(r.nexthop)}</ip-address></nexthop>` : "";
+      const intf = r.interface ? `<interface>${xmlEsc(r.interface)}</interface>` : "";
+      const metric = r.metric ? `<metric>${r.metric}</metric>` : "";
+      return `<entry name="${xmlEsc(r.name)}"><destination>${xmlEsc(r.destination)}</destination>${nh}${intf}${metric}</entry>`;
+    })
+    .join("");
+  if (routes) {
+    ops.push({
+      label: "static routes",
+      xpath: `${D}/network/virtual-router/entry[@name='default']/routing-table/ip/static-route`,
+      element: routes,
     });
   }
 
@@ -955,14 +1013,31 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
   if (sec) ops.push({ label: "security rules", xpath: `${V}/rulebase/security/rules`, element: sec });
 
   // ----- NAT rules -----
+  // Map a zone to its first interface, for interface-based SNAT ("to the WAN
+  // interface address" -> dynamic-ip-and-port/interface-address).
+  const zoneIface = new Map<string, string>();
+  for (const z of ir.zones) if (z.interfaces[0]) zoneIface.set(z.name, z.interfaces[0]);
+
   const nat = ir.nat
     .map((n) => {
       let trans = "";
       if (n.type === "source" && n.translatedSource) {
-        trans =
-          `<source-translation><dynamic-ip-and-port><translated-address>` +
-          `<member>${xmlEsc(n.translatedSource)}</member>` +
-          `</translated-address></dynamic-ip-and-port></source-translation>`;
+        const ts = n.translatedSource;
+        // Resolve interface-based SNAT to the egress (to-zone) interface.
+        let iface = "";
+        if (isIfaceName(ts)) iface = ts;
+        else if (isIfaceRef(ts)) iface = n.destZone ? (zoneIface.get(n.destZone) ?? "") : "";
+        if (iface) {
+          trans =
+            `<source-translation><dynamic-ip-and-port><interface-address>` +
+            `<interface>${xmlEsc(iface)}</interface>` +
+            `</interface-address></dynamic-ip-and-port></source-translation>`;
+        } else {
+          trans =
+            `<source-translation><dynamic-ip-and-port><translated-address>` +
+            `<member>${xmlEsc(ts)}</member>` +
+            `</translated-address></dynamic-ip-and-port></source-translation>`;
+        }
       } else if ((n.type === "destination" || n.type === "static") && n.translatedDest) {
         trans =
           `<destination-translation><translated-address>${xmlEsc(n.translatedDest)}</translated-address>` +

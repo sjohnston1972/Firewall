@@ -180,6 +180,17 @@ export const VpnTunnel = z.object({
 });
 export type VpnTunnel = z.infer<typeof VpnTunnel>;
 
+// ---------- static routes ----------
+export const StaticRoute = z.object({
+  name: name,
+  destination: cidr, // e.g. 172.16.12.1/32
+  nexthop: z.union([ipv4, hostname]).optional(), // gateway IP
+  interface: name.optional(),
+  metric: z.number().int().min(1).max(65535).optional(),
+  description: z.string().max(255).optional(),
+});
+export type StaticRoute = z.infer<typeof StaticRoute>;
+
 // ---------- NGFW profiles ----------
 export const NgfwProfile = z.object({
   name: name,
@@ -226,6 +237,7 @@ export const IR = z.object({
   nat: z.array(NatRule).default([]),
   security: z.array(SecurityRule).default([]),
   vpn: z.array(VpnTunnel).default([]),
+  routes: z.array(StaticRoute).default([]),
   ngfw: z.array(NgfwProfile).default([]),
   protection: Protection.default({}),
 });
@@ -242,6 +254,7 @@ export const IRFragment = z.object({
   nat: z.array(NatRule).default([]),
   security: z.array(SecurityRule).default([]),
   vpn: z.array(VpnTunnel).default([]),
+  routes: z.array(StaticRoute).default([]),
   // items the normaliser couldn't confidently convert — surfaced to the human
   warnings: z
     .array(

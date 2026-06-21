@@ -727,6 +727,59 @@
               },
               "default": []
             },
+            "routes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 63,
+                    "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                  },
+                  "destination": {
+                    "type": "string",
+                    "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}\\/(3[0-2]|[12]?\\d)$"
+                  },
+                  "nexthop": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                      },
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[a-zA-Z0-9._-]+$"
+                      }
+                    ]
+                  },
+                  "interface": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 63,
+                    "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                  },
+                  "metric": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "name",
+                  "destination"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            },
             "ngfw": {
               "type": "array",
               "items": {
@@ -1304,6 +1357,59 @@
                 "required": [
                   "name",
                   "kind"
+                ],
+                "additionalProperties": false
+              },
+              "default": []
+            },
+            "routes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 63,
+                    "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                  },
+                  "destination": {
+                    "type": "string",
+                    "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}\\/(3[0-2]|[12]?\\d)$"
+                  },
+                  "nexthop": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^(25[0-5]|2[0-4]\\d|1?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}$"
+                      },
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253,
+                        "pattern": "^[a-zA-Z0-9._-]+$"
+                      }
+                    ]
+                  },
+                  "interface": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 63,
+                    "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                  },
+                  "metric": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 255
+                  }
+                },
+                "required": [
+                  "name",
+                  "destination"
                 ],
                 "additionalProperties": false
               },

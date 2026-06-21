@@ -72,6 +72,10 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
   const zoneOf = (iface: string) =>
     design.zones.find((z) => z.interfaces.includes(iface))?.name ?? null;
 
+  const addrOf = (iface: string) => design.interfaceAddrs?.[iface] ?? { mode: "none" as const };
+  const setAddr = (iface: string, next: { mode: "none" | "dhcp" | "static"; address?: string }) =>
+    update({ interfaceAddrs: { ...(design.interfaceAddrs ?? {}), [iface]: next } });
+
   const listEditor =
     (key: "dns" | "ntp") =>
     (raw: string) =>
@@ -190,28 +194,65 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
             <div className="grid gap-2 sm:grid-cols-2">
               {ifaceNames.map((iface) => {
                 const assigned = zoneOf(iface);
+                const addr = addrOf(iface);
                 return (
                   <div
                     key={iface}
-                    className={`flex items-center justify-between gap-3 rounded-lg border bg-ink-950 px-3 py-2.5 ${
+                    className={`rounded-lg border bg-ink-950 px-3 py-2.5 ${
                       assigned ? "border-accent/40" : "border-ink-700"
                     }`}
                   >
-                    <span className="font-mono text-xs text-slate-100">{iface}</span>
-                    <select
-                      value={assigned ?? ""}
-                      onChange={(e) => assignInterface(iface, e.target.value || null)}
-                      aria-label={`Zone for ${iface}`}
-                      disabled={design.zones.length === 0}
-                      className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
-                    >
-                      <option value="">unassigned</option>
-                      {design.zones.map((z) => (
-                        <option key={z.name} value={z.name}>
-                          {z.name}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-xs text-slate-100">{iface}</span>
+                      <select
+                        value={assigned ?? ""}
+                        onChange={(e) => assignInterface(iface, e.target.value || null)}
+                        aria-label={`Zone for ${iface}`}
+                        disabled={design.zones.length === 0}
+                        className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
+                      >
+                        <option value="">unassigned</option>
+                        {design.zones.map((z) => (
+                          <option key={z.name} value={z.name}>
+                            {z.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {assigned && (
+                      <div className="mt-2 flex items-center gap-2 pl-1">
+                        <select
+                          value={addr.mode}
+                          onChange={(e) =>
+                            setAddr(iface, {
+                              mode: e.target.value as "none" | "dhcp" | "static",
+                              address: addr.address,
+                            })
+                          }
+                          aria-label={`Addressing for ${iface}`}
+                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-200 focus:border-accent focus:outline-none"
+                        >
+                          <option value="none">no IP</option>
+                          <option value="dhcp">DHCP</option>
+                          <option value="static">static</option>
+                        </select>
+                        {addr.mode === "static" && (
+                          <input
+                            value={addr.address ?? ""}
+                            onChange={(e) => setAddr(iface, { mode: "static", address: e.target.value })}
+                            placeholder="10.0.0.1/24"
+                            spellCheck={false}
+                            aria-label={`IP/CIDR for ${iface}`}
+                            className="flex-1 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+                          />
+                        )}
+                        {addr.mode === "none" && (
+                          <span className="text-[10px] text-ink-500">
+                            WAN needs DHCP/static for source-NAT
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

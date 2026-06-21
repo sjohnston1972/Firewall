@@ -142,9 +142,17 @@ export interface ZoneDesign {
   interfaces: string[];
 }
 
+export type IfaceMode = "none" | "dhcp" | "static";
+export interface IfaceAddr {
+  mode: IfaceMode;
+  address?: string; // CIDR when mode === "static"
+}
+
 export interface Design {
   hostname?: string;
   zones: ZoneDesign[];
+  /** per-interface L3 addressing, keyed by interface name */
+  interfaceAddrs?: Record<string, IfaceAddr>;
   dns: string[];
   ntp: string[];
   timezone?: string;

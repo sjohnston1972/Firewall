@@ -98,14 +98,22 @@ function mapDesign(
   ngfw?: NgfwSettings,
   protection?: ProtectionSettings,
 ): Record<string, unknown> {
-  // Derive interface stubs from the zones so the plan/validate see them defined.
+  // Derive interfaces from the zones, with L3 addressing. WAN (untrust) defaults
+  // to DHCP so source-NAT "to the WAN interface address" can commit/function;
+  // others default to none unless the engineer set a static IP.
   const ifaceZone = new Map<string, string>();
   for (const z of design.zones) for (const i of z.interfaces) ifaceZone.set(i, z.name);
-  const interfaces = [...ifaceZone.entries()].map(([name, zone]) => ({
-    name,
-    enabled: true,
-    zone,
-  }));
+  const zoneType = new Map(design.zones.map((z) => [z.name, z.type]));
+  const interfaces = [...ifaceZone.entries()].map(([name, zone]) => {
+    const a = design.interfaceAddrs?.[name];
+    let addressing: { mode: "dhcp" } | { mode: "static"; address: string } | { mode: "none" };
+    if (a?.mode === "static" && a.address) addressing = { mode: "static", address: a.address };
+    else if (a?.mode === "dhcp") addressing = { mode: "dhcp" };
+    else if ((!a || a.mode === "none") && zoneType.get(zone) === "untrust")
+      addressing = { mode: "dhcp" }; // WAN default
+    else addressing = { mode: "none" };
+    return { name, enabled: true, zone, addressing };
+  });
 
   const ngfwProfiles =
     ngfw && Object.values(ngfw).some(Boolean)
