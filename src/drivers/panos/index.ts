@@ -697,21 +697,25 @@ export class PanosDriver implements FirewallDriver {
         return null;
       };
 
-      // ---- core baseline ----
-      const coreFail = await push(coreOps);
-      if (coreFail) {
-        return { ok: false, committed: false, messages: [...messages, `Push failed — ${coreFail}`] };
-      }
-
-      // Push-only mode: stage everything (core + IPSec + GP), no commit.
-      if (!commit) {
-        for (const [name, list] of [
-          ["IPSec", ipsecOps],
-          ["GlobalProtect", gpOps],
-        ] as const) {
-          const f = list.length ? await push(list) : null;
-          if (f) messages.push(`${name} section not staged — ${f}`);
+      // GP needs a server certificate before its ssl-tls profile references it.
+      const genGpCert = async () => {
+        if (!gpOps.length) return;
+        try {
+          await this.op(
+            `<request><certificate><generate><certificate-name>bastion-gp</certificate-name>` +
+              `<name>bastion-gp</name><algorithm><RSA><rsa-nbits>2048</rsa-nbits></RSA></algorithm>` +
+              `<digest>sha256</digest><ca>yes</ca></generate></certificate></request>`,
+          );
+        } catch {
+          /* non-fatal */
         }
+      };
+
+      // Push-only mode: stage everything, no commit.
+      if (!commit) {
+        await genGpCert();
+        const f = await push(allOps);
+        if (f) messages.push(`Section not staged — ${f}`);
         return {
           ok: true,
           committed: false,
@@ -722,6 +726,37 @@ export class PanosDriver implements FirewallDriver {
         };
       }
 
+      // ---- Attempt ONE simultaneous commit of everything (core + IPSec + GP). ----
+      await genGpCert();
+      const allFail = await push(allOps);
+      if (!allFail) {
+        const one = await this.commitAndWait();
+        if (one.ok) {
+          return {
+            ok: true,
+            committed: true,
+            jobId: one.jobId,
+            messages: [
+              ...messages,
+              `All sections committed together${one.jobId ? ` (job ${one.jobId})` : ""}.`,
+            ],
+          };
+        }
+        messages.push(
+          `Combined commit failed (${one.error}). Falling back to a phased apply so the baseline still lands.`,
+        );
+      } else {
+        messages.push(`A section failed to push (${allFail}). Falling back to a phased apply.`);
+      }
+
+      // ---- Fallback: revert the candidate, then commit in independent phases so
+      // one optional VPN feature can never leave the core baseline uncommitted. ----
+      await this.op("<revert><config></config></revert>");
+
+      const coreFail = await push(coreOps);
+      if (coreFail) {
+        return { ok: false, committed: false, messages: [...messages, `Push failed — ${coreFail}`] };
+      }
       const core = await this.commitAndWait();
       if (!core.ok) {
         return {
@@ -733,7 +768,6 @@ export class PanosDriver implements FirewallDriver {
       }
       messages.push(`Baseline committed${core.jobId ? ` (job ${core.jobId})` : ""}.`);
 
-      // ---- IPSec phase (best-effort; baseline already committed) ----
       if (ipsecOps.length) {
         const f = await push(ipsecOps);
         const r = f ? { ok: false, error: `push of ${f}` } : await this.commitAndWait();
@@ -744,18 +778,8 @@ export class PanosDriver implements FirewallDriver {
         );
       }
 
-      // ---- GlobalProtect phase (best-effort) ----
       if (gpOps.length) {
-        // GP needs a server certificate before its ssl-tls profile references it.
-        try {
-          await this.op(
-            `<request><certificate><generate><certificate-name>bastion-gp</certificate-name>` +
-              `<name>bastion-gp</name><algorithm><RSA><rsa-nbits>2048</rsa-nbits></RSA></algorithm>` +
-              `<digest>sha256</digest><ca>yes</ca></generate></certificate></request>`,
-          );
-        } catch {
-          /* non-fatal */
-        }
+        await genGpCert();
         const f = await push(gpOps);
         const r = f ? { ok: false, error: `push of ${f}` } : await this.commitAndWait();
         messages.push(
@@ -1192,6 +1216,8 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     // GlobalProtect's broker wants an interface-only local-address (an explicit
     // <ip> breaks it); the interface must be in a zone and carry an IP.
     const gpLocal = `<local-address><interface>${xmlEsc(wanIface)}</interface></local-address>`;
+    const wanObj = ir.interfaces.find((i) => i.name === wanIface);
+    const wanHost = wanObj?.addressing.mode === "static" ? wanObj.addressing.address.split("/")[0] : "";
     const s2s = ir.vpn.filter((v) => v.kind === "site-to-site" && v.peerAddress);
     const gp = ir.vpn.filter((v) => v.kind === "remote-access");
 
@@ -1271,9 +1297,16 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
           xpath: `${V}/global-protect/global-protect-gateway`,
           element: `<entry name="${xmlEsc(v.name)}-gw"><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile>${gpLocal}<client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><tunnel-mode>yes</tunnel-mode><remote-user-tunnel-configs><entry name="default"><ip-pool><member>${xmlEsc(pool)}</member></ip-pool></entry></remote-user-tunnel-configs></entry>`,
         });
-        // The GP portal (client-config distribution) carries many environment-
-        // specific required fields and a brittle broker check — left for the
-        // engineer to add on top of the committed gateway baseline.
+        // GP portal — portal-config requires local-address + custom-login-page +
+        // custom-home-page (factory-default response pages). The per-client
+        // gateway list (client-config) is environment-specific and left for the
+        // engineer; the portal commits without it. wanHost is referenced for clarity.
+        void wanHost;
+        ops.push({
+          label: `GP portal ${v.name}`,
+          xpath: `${V}/global-protect/global-protect-portal`,
+          element: `<entry name="${xmlEsc(v.name)}-portal"><portal-config><ssl-tls-service-profile>bastion-gp-ssl</ssl-tls-service-profile>${gpLocal}<client-auth><entry name="default"><os>Any</os><authentication-profile>bastion-gp-auth</authentication-profile></entry></client-auth><custom-login-page>factory-default</custom-login-page><custom-home-page>factory-default</custom-home-page></portal-config></entry>`,
+        });
       }
     }
   }
