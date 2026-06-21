@@ -64,6 +64,8 @@ export const Interface = z.object({
     ])
     .default({ mode: "none" }),
   mtu: z.number().int().min(576).max(9216).optional(),
+  /** LACP: this ethernet is a member of the named aggregate (ae<n>). */
+  aggregateGroup: name.optional(),
 });
 export type Interface = z.infer<typeof Interface>;
 

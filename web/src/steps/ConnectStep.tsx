@@ -20,6 +20,7 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
 
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const setCred = (k: keyof typeof target.credentials, v: string) =>
     patch({ target: { ...target, credentials: { ...target.credentials, [k]: v } } });
@@ -46,6 +47,15 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
   const relayCmd =
     `node relay-agent.mjs --url wss://bastion.clydeford.net/api/relay/` +
     `${state.sessionId ?? "<session-id>"} --device ${deviceUrl}`;
+  const copyCmd = async () => {
+    try {
+      await navigator.clipboard.writeText(relayCmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
 
   const connected = state.conn?.ok === true;
 
@@ -213,9 +223,18 @@ export function ConnectStep({ state, patch, onNext, step, total, setVendor }: Co
                       run it on a host that reaches the device, then Test.
                     </span>
                   </div>
-                  <code className="mt-1.5 block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-1.5 font-mono text-[10px] text-accent">
-                    {relayCmd}
-                  </code>
+                  <div className="relative mt-1.5">
+                    <code className="block overflow-x-auto whitespace-pre rounded bg-ink-950 px-2 py-1.5 pr-14 font-mono text-[10px] text-accent">
+                      {relayCmd}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={copyCmd}
+                      className="absolute right-1 top-1 rounded border border-ink-600 bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-200 hover:border-accent/50 hover:text-accent"
+                    >
+                      {copied ? "✓" : "Copy"}
+                    </button>
+                  </div>
                 </div>
               )}
 

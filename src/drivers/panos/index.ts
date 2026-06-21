@@ -840,28 +840,49 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     });
   }
 
-  // ----- interfaces (ethernet, layer3) -----
+  // Shared layer3 block (static IP / dhcp-client / empty).
+  const l3Block = (i: IR["interfaces"][number]): string => {
+    if (i.addressing.mode === "static") {
+      return `<ip><entry name="${xmlEsc(i.addressing.address)}"/></ip>`;
+    }
+    if (i.addressing.mode === "dhcp") return "<dhcp-client><enable>yes</enable></dhcp-client>";
+    return "";
+  };
+  const comment = (i: IR["interfaces"][number]) =>
+    i.description ? `<comment>${xmlEsc(i.description)}</comment>` : "";
+
+  // ----- aggregate (LACP) interfaces: ae<n> as L3 bundles -----
+  // Render the ae interfaces FIRST so member ethernets can reference them.
+  const ae = ir.interfaces
+    .filter((i) => /^ae\d+$/i.test(i.name))
+    .map((i) => `<entry name="${xmlEsc(i.name)}"><layer3>${l3Block(i)}</layer3>${comment(i)}</entry>`)
+    .join("");
+  if (ae) {
+    ops.push({
+      label: "aggregate interfaces (LACP)",
+      xpath: `${D}/network/interface/aggregate-ethernet`,
+      element: ae,
+    });
+  }
+
+  // ----- ethernet interfaces (L3, or LACP members via aggregate-group) -----
   const eth = ir.interfaces
     .filter((i) => /^ethernet/i.test(i.name))
-    .map((i) => {
-      let l3 = "";
-      if (i.addressing.mode === "static") {
-        l3 = `<ip><entry name="${xmlEsc(i.addressing.address)}"/></ip>`;
-      } else if (i.addressing.mode === "dhcp") {
-        l3 = "<dhcp-client><enable>yes</enable></dhcp-client>";
-      }
-      const comment = i.description ? `<comment>${xmlEsc(i.description)}</comment>` : "";
-      return `<entry name="${xmlEsc(i.name)}"><layer3>${l3}</layer3>${comment}</entry>`;
-    })
+    .map((i) =>
+      i.aggregateGroup
+        ? `<entry name="${xmlEsc(i.name)}"><aggregate-group>${xmlEsc(i.aggregateGroup)}</aggregate-group></entry>`
+        : `<entry name="${xmlEsc(i.name)}"><layer3>${l3Block(i)}</layer3>${comment(i)}</entry>`,
+    )
     .join("");
   if (eth) {
     ops.push({ label: "interfaces", xpath: `${D}/network/interface/ethernet`, element: eth });
   }
 
-  // Default virtual-router — L3 interfaces are useless without one (commit warns
-  // "interface has no virtual-router"). Bind every ethernet interface we configure
-  // to a "default" VR. action=set merges, so an existing "default" VR is reused.
-  const ethL3 = ir.interfaces.filter((i) => /^ethernet/i.test(i.name)).map((i) => i.name);
+  // Default virtual-router — bind routable L3 interfaces (standalone ethernets +
+  // aggregates; LACP MEMBER ethernets are part of the ae, not routed directly).
+  const ethL3 = ir.interfaces
+    .filter((i) => !i.aggregateGroup && (/^ethernet/i.test(i.name) || /^ae\d+$/i.test(i.name)))
+    .map((i) => i.name);
   if (ethL3.length) {
     const vrMembers = ethL3.map((n) => `<member>${xmlEsc(n)}</member>`).join("");
     ops.push({

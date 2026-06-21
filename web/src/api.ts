@@ -98,22 +98,39 @@ function mapDesign(
   ngfw?: NgfwSettings,
   protection?: ProtectionSettings,
 ): Record<string, unknown> {
-  // Derive interfaces from the zones, with L3 addressing. WAN (untrust) defaults
-  // to DHCP so source-NAT "to the WAN interface address" can commit/function;
-  // others default to none unless the engineer set a static IP.
+  // LACP: member ethernet -> its aggregate (ae<n>).
+  const memberToAe = new Map<string, string>();
+  for (const ag of design.aggregates ?? [])
+    for (const m of ag.members) memberToAe.set(m, ag.name);
+
+  // Derive L3 interfaces from the zones, with addressing. Trailing spaces are
+  // trimmed. "config" mode pulls the IP discovered from the device; WAN (untrust)
+  // falls back to DHCP so source-NAT can commit/function.
   const ifaceZone = new Map<string, string>();
   for (const z of design.zones) for (const i of z.interfaces) ifaceZone.set(i, z.name);
   const zoneType = new Map(design.zones.map((z) => [z.name, z.type]));
-  const interfaces = [...ifaceZone.entries()].map(([name, zone]) => {
+  type Addr = { mode: "dhcp" } | { mode: "static"; address: string } | { mode: "none" };
+  const resolveAddr = (name: string, zone: string): Addr => {
     const a = design.interfaceAddrs?.[name];
-    let addressing: { mode: "dhcp" } | { mode: "static"; address: string } | { mode: "none" };
-    if (a?.mode === "static" && a.address) addressing = { mode: "static", address: a.address };
-    else if (a?.mode === "dhcp") addressing = { mode: "dhcp" };
-    else if ((!a || a.mode === "none") && zoneType.get(zone) === "untrust")
-      addressing = { mode: "dhcp" }; // WAN default
-    else addressing = { mode: "none" };
-    return { name, enabled: true, zone, addressing };
-  });
+    const addr = a?.address?.trim();
+    const mode = a?.mode ?? "config";
+    if (mode === "dhcp") return { mode: "dhcp" };
+    if (mode === "static") return addr ? { mode: "static", address: addr } : { mode: "none" };
+    if (mode === "config" && addr) return { mode: "static", address: addr }; // pulled IP
+    // no IP available → WAN defaults to DHCP, others to none
+    return zoneType.get(zone) === "untrust" ? { mode: "dhcp" } : { mode: "none" };
+  };
+
+  const interfaces: Record<string, unknown>[] = [];
+  // zone-assigned interfaces (standalone ethernets + ae bundles) — L3
+  for (const [name, zone] of ifaceZone.entries()) {
+    if (memberToAe.has(name)) continue; // a bundle member can't be an L3 zone iface
+    interfaces.push({ name, enabled: true, zone, addressing: resolveAddr(name, zone) });
+  }
+  // LACP member ethernets — carry aggregate-group, no addressing/zone of their own
+  for (const [member, aeName] of memberToAe.entries()) {
+    interfaces.push({ name: member, enabled: true, aggregateGroup: aeName });
+  }
 
   const ngfwProfiles =
     ngfw && Object.values(ngfw).some(Boolean)

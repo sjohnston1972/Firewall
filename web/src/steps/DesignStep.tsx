@@ -6,7 +6,7 @@ import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field } from "../components/Field";
 import { Button } from "../components/Button";
 import { StatusBadge } from "../components/StatusBadge";
-import type { ZoneDesign } from "../types";
+import type { IfaceMode, ZoneDesign } from "../types";
 
 type ZoneType = ZoneDesign["type"];
 
@@ -72,9 +72,89 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
   const zoneOf = (iface: string) =>
     design.zones.find((z) => z.interfaces.includes(iface))?.name ?? null;
 
-  const addrOf = (iface: string) => design.interfaceAddrs?.[iface] ?? { mode: "none" as const };
-  const setAddr = (iface: string, next: { mode: "none" | "dhcp" | "static"; address?: string }) =>
-    update({ interfaceAddrs: { ...(design.interfaceAddrs ?? {}), [iface]: next } });
+  const discoveredIp = (iface: string) =>
+    state.inventory?.interfaces.find((i) => i.name === iface)?.address;
+  const addrOf = (iface: string) =>
+    design.interfaceAddrs?.[iface] ?? { mode: "config" as const, address: discoveredIp(iface) };
+  const setAddr = (
+    iface: string,
+    next: { mode: "config" | "none" | "dhcp" | "static"; address?: string },
+  ) => update({ interfaceAddrs: { ...(design.interfaceAddrs ?? {}), [iface]: next } });
+
+  // ---- LACP link-aggregation (ae<n>) ----
+  const aggregates = design.aggregates ?? [];
+  const bundleOf = (iface: string) => aggregates.find((a) => a.members.includes(iface))?.name ?? null;
+  const setAggregates = (next: typeof aggregates) => update({ aggregates: next });
+  const nextAeName = () => {
+    let n = 1;
+    while (aggregates.some((a) => a.name === `ae${n}`)) n++;
+    return `ae${n}`;
+  };
+  const addToBundle = (iface: string, aeName: string) => {
+    // a bundled member can't also be a zone interface
+    update({
+      zones: design.zones.map((z) => ({ ...z, interfaces: z.interfaces.filter((i) => i !== iface) })),
+      aggregates: aggregates.map((a) =>
+        a.name === aeName ? { ...a, members: Array.from(new Set([...a.members, iface])) } : a,
+      ),
+    });
+  };
+  const newBundleWith = (iface: string) => {
+    const name = nextAeName();
+    update({
+      zones: design.zones.map((z) => ({ ...z, interfaces: z.interfaces.filter((i) => i !== iface) })),
+      aggregates: [...aggregates, { name, members: [iface] }],
+    });
+  };
+  const removeFromBundle = (iface: string) =>
+    setAggregates(
+      aggregates
+        .map((a) => ({ ...a, members: a.members.filter((m) => m !== iface) }))
+        .filter((a) => a.members.length > 0),
+    );
+  const deleteBundle = (aeName: string) =>
+    update({
+      zones: design.zones.map((z) => ({ ...z, interfaces: z.interfaces.filter((i) => i !== aeName) })),
+      aggregates: aggregates.filter((a) => a.name !== aeName),
+    });
+
+  const renderAddr = (name: string) => {
+    const addr = addrOf(name);
+    const disc = discoveredIp(name);
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 pl-1">
+        <select
+          value={addr.mode}
+          onChange={(e) => setAddr(name, { mode: e.target.value as IfaceMode, address: addr.address })}
+          aria-label={`Addressing for ${name}`}
+          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-200 focus:border-accent focus:outline-none"
+        >
+          <option value="config">From device config</option>
+          <option value="dhcp">DHCP</option>
+          <option value="static">Static</option>
+          <option value="none">No IP</option>
+        </select>
+        {addr.mode === "static" && (
+          <input
+            value={addr.address ?? ""}
+            onChange={(e) => setAddr(name, { mode: "static", address: e.target.value.replace(/\s/g, "") })}
+            placeholder="10.0.0.1/24"
+            spellCheck={false}
+            aria-label={`IP/CIDR for ${name}`}
+            className="flex-1 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
+          />
+        )}
+        {addr.mode === "config" && (
+          <span className="font-mono text-[10px] text-ink-500">
+            {disc ? `pulled from device: ${disc}` : "(none on device — WAN falls back to DHCP)"}
+          </span>
+        )}
+        {addr.mode === "none" && (
+          <span className="text-[10px] text-ink-500">no IP — WAN needs DHCP/static for source-NAT</span>
+        )}
+      </div>
+    );
+  };
 
   const listEditor =
     (key: "dns" | "ntp") =>
@@ -183,76 +263,128 @@ export function DesignStep({ state, patch, onNext, onBack, step, total }: StepPr
         <CardHeader
           eyebrow="Interface mapping"
           title="Map interfaces to zones"
-          description="Each interface belongs to one zone. Discovered interfaces are listed; assign them below."
+          description="Assign each interface to a zone and set its addressing. Default pulls the IP discovered on the device. Bundle interfaces into a LACP aggregate (ae) with the Bundle control."
         />
         <CardBody>
-          {ifaceNames.length === 0 ? (
+          {ifaceNames.length === 0 && aggregates.length === 0 ? (
             <p className="text-sm text-ink-500">
               No discovered interfaces. Run discovery first, or continue and map later.
             </p>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-2">
               {ifaceNames.map((iface) => {
+                const bundle = bundleOf(iface);
+                if (bundle) {
+                  return (
+                    <div
+                      key={iface}
+                      className="flex items-center justify-between rounded-lg border border-ink-700 bg-ink-950 px-3 py-2"
+                    >
+                      <span className="font-mono text-xs text-slate-100">{iface}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="rounded bg-accent-soft/40 px-1.5 py-0.5 font-mono text-[10px] text-accent">
+                          bundled in {bundle}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeFromBundle(iface)}
+                          className="text-[11px] text-ink-500 hover:text-bad"
+                        >
+                          unbundle
+                        </button>
+                      </span>
+                    </div>
+                  );
+                }
                 const assigned = zoneOf(iface);
-                const addr = addrOf(iface);
                 return (
                   <div
                     key={iface}
-                    className={`rounded-lg border bg-ink-950 px-3 py-2.5 ${
-                      assigned ? "border-accent/40" : "border-ink-700"
-                    }`}
+                    className={`rounded-lg border bg-ink-950 px-3 py-2.5 ${assigned ? "border-accent/40" : "border-ink-700"}`}
                   >
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-mono text-xs text-slate-100">{iface}</span>
-                      <select
-                        value={assigned ?? ""}
-                        onChange={(e) => assignInterface(iface, e.target.value || null)}
-                        aria-label={`Zone for ${iface}`}
-                        disabled={design.zones.length === 0}
-                        className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
-                      >
-                        <option value="">unassigned</option>
-                        {design.zones.map((z) => (
-                          <option key={z.name} value={z.name}>
-                            {z.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {assigned && (
-                      <div className="mt-2 flex items-center gap-2 pl-1">
+                      <div className="flex items-center gap-2">
                         <select
-                          value={addr.mode}
-                          onChange={(e) =>
-                            setAddr(iface, {
-                              mode: e.target.value as "none" | "dhcp" | "static",
-                              address: addr.address,
-                            })
-                          }
-                          aria-label={`Addressing for ${iface}`}
-                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-200 focus:border-accent focus:outline-none"
+                          value={assigned ?? ""}
+                          onChange={(e) => assignInterface(iface, e.target.value || null)}
+                          aria-label={`Zone for ${iface}`}
+                          disabled={design.zones.length === 0}
+                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
                         >
-                          <option value="none">no IP</option>
-                          <option value="dhcp">DHCP</option>
-                          <option value="static">static</option>
+                          <option value="">unassigned</option>
+                          {design.zones.map((z) => (
+                            <option key={z.name} value={z.name}>
+                              {z.name}
+                            </option>
+                          ))}
                         </select>
-                        {addr.mode === "static" && (
-                          <input
-                            value={addr.address ?? ""}
-                            onChange={(e) => setAddr(iface, { mode: "static", address: e.target.value })}
-                            placeholder="10.0.0.1/24"
-                            spellCheck={false}
-                            aria-label={`IP/CIDR for ${iface}`}
-                            className="flex-1 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[10px] text-slate-100 placeholder:text-ink-600 focus:border-accent focus:outline-none"
-                          />
-                        )}
-                        {addr.mode === "none" && (
-                          <span className="text-[10px] text-ink-500">
-                            WAN needs DHCP/static for source-NAT
-                          </span>
-                        )}
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "__new") newBundleWith(iface);
+                            else if (v) addToBundle(iface, v);
+                          }}
+                          aria-label={`Bundle ${iface}`}
+                          title="LACP link aggregation"
+                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none"
+                        >
+                          <option value="">bundle…</option>
+                          {aggregates.map((a) => (
+                            <option key={a.name} value={a.name}>
+                              + {a.name}
+                            </option>
+                          ))}
+                          <option value="__new">+ new ae</option>
+                        </select>
                       </div>
-                    )}
+                    </div>
+                    {assigned && renderAddr(iface)}
+                  </div>
+                );
+              })}
+
+              {aggregates.map((ag) => {
+                const assigned = zoneOf(ag.name);
+                return (
+                  <div key={ag.name} className="rounded-lg border border-accent/40 bg-ink-950 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-accent">
+                        {ag.name}{" "}
+                        <span className="text-[10px] text-ink-500">
+                          LACP · {ag.members.length} member{ag.members.length === 1 ? "" : "s"}
+                        </span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={assigned ?? ""}
+                          onChange={(e) => assignInterface(ag.name, e.target.value || null)}
+                          aria-label={`Zone for ${ag.name}`}
+                          disabled={design.zones.length === 0}
+                          className="cursor-pointer rounded-md border border-ink-600 bg-ink-900 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-accent focus:outline-none disabled:opacity-40"
+                        >
+                          <option value="">unassigned</option>
+                          {design.zones.map((z) => (
+                            <option key={z.name} value={z.name}>
+                              {z.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => deleteBundle(ag.name)}
+                          aria-label={`Delete bundle ${ag.name}`}
+                          className="text-ink-500 transition-colors hover:text-bad"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-1 font-mono text-[10px] text-ink-500">
+                      {ag.members.join(", ") || "no members yet"}
+                    </div>
+                    {assigned && renderAddr(ag.name)}
                   </div>
                 );
               })}

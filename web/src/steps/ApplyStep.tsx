@@ -73,8 +73,27 @@ export function ApplyStep({ state, patch, onNext, onBack, step, total }: StepPro
     }
   };
 
-  const downloadBundle = () => {
-    if (state.sessionId) window.open(api.bundleUrl(state.sessionId), "_blank", "noopener");
+  const downloadBundle = async () => {
+    if (!state.sessionId) return;
+    try {
+      // Fetch the bundle as a blob (same-origin, carries the Access cookie) and
+      // trigger a download via a temporary anchor — robust vs popup-blocked window.open.
+      const blob = await api.getBundle(state.sessionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bastion-${state.sessionId.slice(4, 12)}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.status === 404
+          ? "No bundle yet — render the staged bundle first."
+          : "Bundle download failed.",
+      );
+    }
   };
 
   // Show the active result only if it matches the selected mode.

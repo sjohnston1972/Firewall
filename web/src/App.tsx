@@ -45,6 +45,8 @@ const STEPS: StepDef[] = [
 /** The whole onboarding session lives in one state object passed to each step. */
 export interface WizardState {
   sessionId: string | null;
+  /** user-chosen session name (overrides the auto-derived one) */
+  name: string;
   target: TargetConfig;
   conn: ConnInfo | null;
   inventory: DeviceInventory | null;
@@ -62,6 +64,7 @@ export interface WizardState {
 function initialState(): WizardState {
   return {
     sessionId: null,
+    name: "",
     target: {
       vendor: "panos",
       transport: "direct",
@@ -172,12 +175,15 @@ export default function App() {
   const [saved, setSaved] = useState(false);
 
   // Distinct, recognisable name so sessions aren't all "Palo Alto onboarding".
+  // An explicit user-given name wins; otherwise derive from hostname / vendor.
   const sessionName = useMemo(() => {
+    const chosen = state.name?.trim();
+    if (chosen) return chosen;
     const host = state.design.hostname?.trim();
     if (host) return host;
     const sid = state.sessionId ? ` · ${state.sessionId.slice(4, 10)}` : "";
     return `${vendorMeta.label}${sid}`;
-  }, [state.design.hostname, vendorMeta.label, state.sessionId]);
+  }, [state.name, state.design.hostname, vendorMeta.label, state.sessionId]);
 
   // Remember the active session so a refresh can resume it.
   useEffect(() => {
@@ -368,9 +374,19 @@ export default function App() {
               {vendorMeta.label}
             </StatusBadge>
             {state.sessionId ? (
-              <StatusBadge tone={saved ? "good" : "neutral"} dot={saved}>
-                {saved ? "saved" : `session ${state.sessionId.slice(4, 12)}`}
-              </StatusBadge>
+              <>
+                <input
+                  value={state.name}
+                  onChange={(e) => patch({ name: e.target.value })}
+                  placeholder={sessionName}
+                  aria-label="Name this session"
+                  title="Name this session"
+                  className="h-8 w-44 rounded-md border border-ink-700 bg-ink-900/60 px-2.5 text-xs text-slate-100 placeholder:text-ink-500 focus:border-accent focus:outline-none"
+                />
+                <StatusBadge tone={saved ? "good" : "neutral"} dot={saved}>
+                  {saved ? "saved" : state.sessionId.slice(4, 12)}
+                </StatusBadge>
+              </>
             ) : (
               <StatusBadge tone="neutral">no session</StatusBadge>
             )}

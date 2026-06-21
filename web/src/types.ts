@@ -19,7 +19,15 @@ export interface VendorMeta {
   cloudManaged: boolean; // Meraki — hides IP/transport, shows API fields
 }
 
+// Display order: Cisco FTD · Palo Alto · Meraki · Cisco ASA · Fortinet.
 export const VENDORS: VendorMeta[] = [
+  {
+    id: "ftd",
+    label: "Cisco FTD",
+    blurb: "FMC / FDM REST",
+    applyModel: "Staged deploy → push",
+    cloudManaged: false,
+  },
   {
     id: "panos",
     label: "Palo Alto",
@@ -28,18 +36,11 @@ export const VENDORS: VendorMeta[] = [
     cloudManaged: false,
   },
   {
-    id: "fortios",
-    label: "Fortinet",
-    blurb: "FortiOS · REST (cmdb)",
-    applyModel: "Direct object writes",
-    cloudManaged: false,
-  },
-  {
-    id: "ftd",
-    label: "Cisco FTD",
-    blurb: "FMC / FDM REST",
-    applyModel: "Staged deploy → push",
-    cloudManaged: false,
+    id: "meraki",
+    label: "Meraki MX",
+    blurb: "Dashboard API · cloud",
+    applyModel: "Direct API writes (no commit)",
+    cloudManaged: true,
   },
   {
     id: "asa",
@@ -49,11 +50,11 @@ export const VENDORS: VendorMeta[] = [
     cloudManaged: false,
   },
   {
-    id: "meraki",
-    label: "Meraki MX",
-    blurb: "Dashboard API · cloud",
-    applyModel: "Direct API writes (no commit)",
-    cloudManaged: true,
+    id: "fortios",
+    label: "Fortinet",
+    blurb: "FortiOS · REST (cmdb)",
+    applyModel: "Direct object writes",
+    cloudManaged: false,
   },
 ];
 
@@ -142,10 +143,16 @@ export interface ZoneDesign {
   interfaces: string[];
 }
 
-export type IfaceMode = "none" | "dhcp" | "static";
+export type IfaceMode = "config" | "none" | "dhcp" | "static";
 export interface IfaceAddr {
-  mode: IfaceMode;
-  address?: string; // CIDR when mode === "static"
+  mode: IfaceMode; // "config" = pull the IP discovered from the device
+  address?: string; // CIDR (static, or the pulled config IP)
+}
+
+/** A link-aggregation (LACP) bundle: an ae<n> interface + member ethernets. */
+export interface AggregateGroup {
+  name: string; // ae1, ae2…
+  members: string[]; // ethernet interface names
 }
 
 export interface Design {
@@ -153,6 +160,8 @@ export interface Design {
   zones: ZoneDesign[];
   /** per-interface L3 addressing, keyed by interface name */
   interfaceAddrs?: Record<string, IfaceAddr>;
+  /** LACP link-aggregation bundles (ae<n>) */
+  aggregates?: AggregateGroup[];
   dns: string[];
   ntp: string[];
   timezone?: string;
