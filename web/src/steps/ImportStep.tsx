@@ -111,7 +111,7 @@ export function ImportStep({ state, patch, onNext, onBack, step, total }: StepPr
           />
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button variant="primary" onClick={normalise} loading={busy} disabled={!source.trim()}>
-              <SparkIcon /> Normalise with AI
+              {busy ? "Normalising…" : (<><SparkIcon /> Normalise with AI</>)}
             </Button>
             <input
               ref={fileRef}
@@ -135,7 +135,25 @@ export function ImportStep({ state, patch, onNext, onBack, step, total }: StepPr
         </CardBody>
       </Card>
 
-      {state.imports.length === 0 ? (
+      {busy && (
+        <Card>
+          <CardBody className="flex items-center gap-3 py-5">
+            <span
+              aria-hidden
+              className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent"
+            />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-100">Normalising with AI…</p>
+              <p className="text-[11px] leading-snug text-ink-500">
+                Converting your config to a schema-validated IR fragment and flagging anything
+                ambiguous — this can take a few seconds.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {!busy && state.imports.length === 0 ? (
         <p className="rounded-lg border border-dashed border-ink-700 px-3 py-8 text-center text-sm text-ink-500">
           No imports yet. Normalised fragments appear here for review. Nothing joins the plan
           until you accept it.
