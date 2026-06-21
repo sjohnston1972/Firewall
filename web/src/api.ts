@@ -345,7 +345,9 @@ export const api = {
       ok: Boolean(r.result?.ok),
       mode,
       commitId: r.result?.jobId,
-      message: r.result?.messages?.join("; "),
+      committed: r.result?.committed,
+      message: r.result?.messages?.join(" · "),
+      messages: r.result?.messages,
     };
   },
 

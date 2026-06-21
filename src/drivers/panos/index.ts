@@ -15,6 +15,7 @@ import type { IR } from "../../../schema/ir";
 import type { Credentials, Vendor } from "../../types";
 import type { Transport, TransportRequest } from "../../transport/types";
 import type {
+  ApplyOptions,
   ApplyResult,
   BuildPlan,
   ConnInfo,
@@ -149,6 +150,53 @@ export class PanosDriver implements FirewallDriver {
     const res = await this.transport.fetch(req);
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`PAN-OS config get failed: HTTP ${res.status}`);
+    }
+    return res.body;
+  }
+
+  /** Push a config element via the config API (type=config&action=set). Edits
+   *  land in the CANDIDATE config; the commit promotes them to running. */
+  private async configSet(xpath: string, element: string): Promise<string> {
+    const key = await this.ensureApiKey();
+    const body =
+      `type=config&action=set` +
+      `&xpath=${encodeURIComponent(xpath)}` +
+      `&element=${encodeURIComponent(element)}` +
+      `&key=${encodeURIComponent(key)}`;
+    const res = await this.transport.fetch({
+      method: "POST",
+      path: "/api/",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`PAN-OS set failed: HTTP ${res.status}`);
+    }
+    return res.body;
+  }
+
+  /** The config device-entry name (usually localhost.localdomain). */
+  private async deviceName(): Promise<string> {
+    try {
+      const xml = await this.configGet("/config/devices/entry");
+      return PanosDriver.pick(xml, /<entry\b[^>]*\bname="([^"]+)"/i) ?? "localhost.localdomain";
+    } catch {
+      return "localhost.localdomain";
+    }
+  }
+
+  /** Commit the candidate config. Returns the raw XML (job id / status). */
+  private async commitConfig(): Promise<string> {
+    const key = await this.ensureApiKey();
+    const body = `type=commit&cmd=${encodeURIComponent("<commit></commit>")}&key=${encodeURIComponent(key)}`;
+    const res = await this.transport.fetch({
+      method: "POST",
+      path: "/api/",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`PAN-OS commit failed: HTTP ${res.status}`);
     }
     return res.body;
   }
@@ -446,73 +494,70 @@ export class PanosDriver implements FirewallDriver {
     });
   }
 
-  async applyLive(plan: BuildPlan): Promise<ApplyResult> {
+  async applyLive(plan: BuildPlan, opts?: ApplyOptions): Promise<ApplyResult> {
+    const commit = opts?.commit !== false; // default: push + commit
     const messages: string[] = [];
     try {
-      // 1) Render deterministic `set` CLI commands.
-      const rendered = renderPanosSet(plan.ir);
-      messages.push("Rendered PAN-OS set commands.");
+      await this.ensureApiKey();
+      const dev = await this.deviceName();
 
-      // 2) Push as candidate config. PAN-OS accepts `set`-format CLI via the
-      //    op endpoint using <set><cli>...</cli></set>-style commands, or via
-      //    type=config with set actions. Edits land in the candidate config
-      //    implicitly; the commit in step 3 promotes them to running.
-      //    (Structure only — no device present in this build.)
-      const key = await this.ensureApiKey();
+      // Push each config section via the config API (action=set). These land in
+      // the CANDIDATE config; the commit (if requested) promotes them to running.
+      const ops = renderPanosElements(plan.ir, dev);
+      if (ops.length === 0) {
+        return { ok: false, committed: false, messages: ["Nothing to push — the plan is empty."] };
+      }
+      for (const op of ops) {
+        const res = await this.configSet(op.xpath, op.element);
+        const status = PanosDriver.pick(res, /status="([^"]+)"/i);
+        if (!status || status.toLowerCase() !== "success") {
+          const msg = PanosDriver.pick(res, /<msg>([\s\S]*?)<\/msg>/i) ?? res.slice(0, 200);
+          return {
+            ok: false,
+            committed: false,
+            messages: [...messages, `Push of ${op.label} failed: ${msg}`],
+          };
+        }
+        messages.push(`Pushed ${op.label}.`);
+      }
 
-      const pushReq: TransportRequest = {
-        method: "POST",
-        path: `/api/?type=op&key=${encodeURIComponent(key)}`,
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        // The CLI set block is sent as the op command payload.
-        body: `cmd=${encodeURIComponent(`<set><cli>${rendered}</cli></set>`)}`,
-      };
-      const pushRes = await this.transport.fetch(pushReq);
-      if (pushRes.status < 200 || pushRes.status >= 300) {
+      // Push-only mode: leave the candidate for the engineer to commit on-box.
+      if (!commit) {
         return {
-          ok: false,
+          ok: true,
           committed: false,
           messages: [
             ...messages,
-            `Candidate push failed: HTTP ${pushRes.status}`,
+            "Candidate configuration staged on the device. Review and commit on the firewall to activate.",
           ],
         };
       }
-      messages.push("Candidate configuration staged on device.");
 
-      // 3) Commit.
-      const commitReq: TransportRequest = {
-        method: "POST",
-        path: `/api/?type=commit&key=${encodeURIComponent(key)}`,
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: `cmd=${encodeURIComponent("<commit></commit>")}`,
-      };
-      const commitRes = await this.transport.fetch(commitReq);
-      if (commitRes.status < 200 || commitRes.status >= 300) {
+      // Commit.
+      const commitRes = await this.commitConfig();
+      const cStatus = PanosDriver.pick(commitRes, /status="([^"]+)"/i);
+      const jobId = PanosDriver.pick(commitRes, /<job>([^<]+)<\/job>/i);
+      const cMsg = PanosDriver.pick(commitRes, /<msg>([\s\S]*?)<\/msg>/i);
+      // PAN returns a <job> id on accepted commits; "no changes" returns a msg, no job.
+      if (!jobId) {
+        if (cMsg && /no changes/i.test(cMsg)) {
+          return { ok: true, committed: true, messages: [...messages, "No changes to commit."] };
+        }
         return {
           ok: false,
           committed: false,
-          messages: [...messages, `Commit failed: HTTP ${commitRes.status}`],
+          messages: [...messages, `Commit rejected${cMsg ? `: ${cMsg}` : ""}`],
         };
       }
-
-      const status = PanosDriver.pick(commitRes.body, /status="([^"]+)"/i);
-      const jobId =
-        PanosDriver.pick(commitRes.body, /<job>([^<]+)<\/job>/i) ?? undefined;
-      if (status && status.toLowerCase() !== "success") {
-        const msg = PanosDriver.pick(commitRes.body, /<msg>([\s\S]*?)<\/msg>/i);
+      if (cStatus && cStatus.toLowerCase() !== "success") {
         return {
           ok: false,
           committed: false,
           jobId,
-          messages: [
-            ...messages,
-            `Commit rejected by device${msg ? `: ${msg}` : ""}`,
-          ],
+          messages: [...messages, `Commit rejected${cMsg ? `: ${cMsg}` : ""}`],
         };
       }
-
-      messages.push(`Commit accepted${jobId ? ` (job ${jobId})` : ""}.`);
+      messages.push(`Commit submitted (job ${jobId}).`);
       return { ok: true, committed: true, jobId, messages };
     } catch (err) {
       // Honest failure — never fabricate a successful apply.
@@ -536,6 +581,171 @@ export class PanosDriver implements FirewallDriver {
 /** PAN-OS quoting: wrap in double quotes if the token has spaces/special chars. */
 function q(value: string): string {
   return /^[A-Za-z0-9._\-/]+$/.test(value) ? value : `"${value}"`;
+}
+
+// ---------------------------------------------------------------------------
+// Config-API element renderer — turns the IR into (xpath, element) set ops that
+// PAN-OS accepts via type=config&action=set. This is the LIVE push path (the
+// `set` CLI block above is for the staged/download bundle only). Verified
+// against PAN-OS 11.2 — action=set merges these into the candidate config.
+// ---------------------------------------------------------------------------
+
+function xmlEsc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** PAN member list; defaults to `any` when empty. */
+function members(arr: string[]): string {
+  const list = arr.length ? arr : ["any"];
+  return list.map((m) => `<member>${xmlEsc(m)}</member>`).join("");
+}
+
+export interface PanosSetOp {
+  label: string;
+  xpath: string;
+  element: string;
+}
+
+export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
+  const D = `/config/devices/entry[@name='${dev}']`;
+  const V = `${D}/vsys/entry[@name='vsys1']`;
+  const ops: PanosSetOp[] = [];
+
+  // ----- system: hostname / dns / ntp -----
+  const sys = ir.system;
+  const sysParts: string[] = [];
+  if (sys.hostname) sysParts.push(`<hostname>${xmlEsc(sys.hostname)}</hostname>`);
+  if (sys.timezone) sysParts.push(`<timezone>${xmlEsc(sys.timezone)}</timezone>`);
+  if (sys.dns.length) {
+    const s = [
+      sys.dns[0] ? `<primary>${xmlEsc(sys.dns[0])}</primary>` : "",
+      sys.dns[1] ? `<secondary>${xmlEsc(sys.dns[1])}</secondary>` : "",
+    ].join("");
+    sysParts.push(`<dns-setting><servers>${s}</servers></dns-setting>`);
+  }
+  if (sys.ntp.length) {
+    const ntp = (slot: string, addr: string) =>
+      `<${slot}><ntp-server-address>${xmlEsc(addr)}</ntp-server-address></${slot}>`;
+    let n = "";
+    if (sys.ntp[0]) n += ntp("primary-ntp-server", sys.ntp[0]);
+    if (sys.ntp[1]) n += ntp("secondary-ntp-server", sys.ntp[1]);
+    sysParts.push(`<ntp-servers>${n}</ntp-servers>`);
+  }
+  if (sysParts.length) {
+    ops.push({ label: "system", xpath: `${D}/deviceconfig/system`, element: sysParts.join("") });
+  }
+
+  // ----- interfaces (ethernet, layer3) -----
+  const eth = ir.interfaces
+    .filter((i) => /^ethernet/i.test(i.name))
+    .map((i) => {
+      let l3 = "";
+      if (i.addressing.mode === "static") {
+        l3 = `<ip><entry name="${xmlEsc(i.addressing.address)}"/></ip>`;
+      } else if (i.addressing.mode === "dhcp") {
+        l3 = "<dhcp-client><enable>yes</enable></dhcp-client>";
+      }
+      const comment = i.description ? `<comment>${xmlEsc(i.description)}</comment>` : "";
+      return `<entry name="${xmlEsc(i.name)}"><layer3>${l3}</layer3>${comment}</entry>`;
+    })
+    .join("");
+  if (eth) {
+    ops.push({ label: "interfaces", xpath: `${D}/network/interface/ethernet`, element: eth });
+  }
+
+  // ----- address objects -----
+  const addr = ir.addresses
+    .map((a) => {
+      const v =
+        a.kind === "fqdn"
+          ? `<fqdn>${xmlEsc(a.value)}</fqdn>`
+          : `<ip-netmask>${xmlEsc(a.value)}</ip-netmask>`;
+      return `<entry name="${xmlEsc(a.name)}">${v}</entry>`;
+    })
+    .join("");
+  if (addr) ops.push({ label: "address objects", xpath: `${V}/address`, element: addr });
+
+  // ----- service objects -----
+  const svc = ir.services
+    .filter((s) => s.protocol === "tcp" || s.protocol === "udp")
+    .map((s) => {
+      const ports = s.portRange ? `${s.portRange[0]}-${s.portRange[1]}` : s.ports.join(",");
+      return `<entry name="${xmlEsc(s.name)}"><protocol><${s.protocol}><port>${xmlEsc(ports)}</port></${s.protocol}></protocol></entry>`;
+    })
+    .join("");
+  if (svc) ops.push({ label: "service objects", xpath: `${V}/service`, element: svc });
+
+  // ----- zones -----
+  const zones = ir.zones
+    .map(
+      (z) =>
+        `<entry name="${xmlEsc(z.name)}"><network><layer3>${z.interfaces
+          .map((m) => `<member>${xmlEsc(m)}</member>`)
+          .join("")}</layer3></network></entry>`,
+    )
+    .join("");
+  if (zones) ops.push({ label: "zones", xpath: `${V}/zone`, element: zones });
+
+  // ----- security rules -----
+  const sec = ir.security
+    .map((r) => {
+      const action = r.action === "reject" ? "reset-client" : r.action; // allow|deny|drop
+      const svcMembers =
+        r.services.length && !(r.services.length === 1 && r.services[0] === "any")
+          ? members(r.services)
+          : "<member>application-default</member>";
+      return (
+        `<entry name="${xmlEsc(r.name)}">` +
+        `<from>${members(r.sourceZones)}</from>` +
+        `<to>${members(r.destZones)}</to>` +
+        `<source>${members(r.sources)}</source>` +
+        `<destination>${members(r.destinations)}</destination>` +
+        `<application>${members(r.applications)}</application>` +
+        `<service>${svcMembers}</service>` +
+        `<action>${action}</action>` +
+        `<log-end>${r.log ? "yes" : "no"}</log-end>` +
+        (r.disabled ? "<disabled>yes</disabled>" : "") +
+        `</entry>`
+      );
+    })
+    .join("");
+  if (sec) ops.push({ label: "security rules", xpath: `${V}/rulebase/security/rules`, element: sec });
+
+  // ----- NAT rules -----
+  const nat = ir.nat
+    .map((n) => {
+      let trans = "";
+      if (n.type === "source" && n.translatedSource) {
+        trans =
+          `<source-translation><dynamic-ip-and-port><translated-address>` +
+          `<member>${xmlEsc(n.translatedSource)}</member>` +
+          `</translated-address></dynamic-ip-and-port></source-translation>`;
+      } else if ((n.type === "destination" || n.type === "static") && n.translatedDest) {
+        trans =
+          `<destination-translation><translated-address>${xmlEsc(n.translatedDest)}</translated-address>` +
+          (n.translatedPort ? `<translated-port>${n.translatedPort}</translated-port>` : "") +
+          `</destination-translation>`;
+      }
+      return (
+        `<entry name="${xmlEsc(n.name)}">` +
+        `<from>${members(n.sourceZone ? [n.sourceZone] : [])}</from>` +
+        `<to>${members(n.destZone ? [n.destZone] : [])}</to>` +
+        `<source>${members(n.originalSource)}</source>` +
+        `<destination>${members(n.originalDest)}</destination>` +
+        `<service>${n.service ? xmlEsc(n.service) : "any"}</service>` +
+        trans +
+        (n.disabled ? "<disabled>yes</disabled>" : "") +
+        `</entry>`
+      );
+    })
+    .join("");
+  if (nat) ops.push({ label: "NAT rules", xpath: `${V}/rulebase/nat/rules`, element: nat });
+
+  return ops;
 }
 
 function renderPanosSet(ir: IR): string {

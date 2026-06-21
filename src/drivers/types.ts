@@ -64,6 +64,12 @@ export interface ApplyResult {
   messages: string[];
 }
 
+/** Options for a live device write. `commit: false` pushes the candidate config
+ *  but leaves the commit to the engineer (performed on the firewall itself). */
+export interface ApplyOptions {
+  commit?: boolean; // default true
+}
+
 /** A BuildPlan is a versioned IR plus a human-readable diff summary. */
 export interface BuildPlan {
   version: number;
@@ -76,7 +82,7 @@ export interface FirewallDriver {
   discover(): Promise<DeviceInventory>;
   validate(plan: BuildPlan): Promise<Validation>;
   render(plan: BuildPlan): Promise<RenderedConfig>;
-  applyLive(plan: BuildPlan): Promise<ApplyResult>;
+  applyLive(plan: BuildPlan, opts?: ApplyOptions): Promise<ApplyResult>;
   readback(): Promise<DeviceInventory>;
 }
 

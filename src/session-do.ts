@@ -413,7 +413,9 @@ export class SessionDO {
 
   private async apply(body: Record<string, unknown>): Promise<Response> {
     const projectId = this.requireProject();
-    const mode = body.mode === "live" ? "live" : "staged";
+    const m = String(body.mode ?? "staged");
+    // staged: render a bundle only · push: write candidate, no commit · live: write + commit
+    const mode = m === "live" ? "live" : m === "push" ? "push" : "staged";
     if (this.applying) throw new HttpError(409, "an apply is already in progress");
     this.applying = true;
     try {
@@ -449,16 +451,18 @@ export class SessionDO {
         return json({ runId, mode, bundle: { ref: bundleKey, filename: rendered.filename } });
       }
 
-      // LIVE — must be connected to a device, plus a typed acknowledgement (§10/§12).
+      // PUSH or LIVE — must be connected, plus a typed acknowledgement (§10/§12).
+      // push = write candidate (engineer commits on-box); live = write + commit.
       this.requireConnected();
       const ack = String(body.acknowledge ?? "");
       const required = this.mem.design?.system?.hostname || "APPLY";
       if (ack !== required) {
-        throw new HttpError(412, `live apply requires typed acknowledgement: "${required}"`);
+        throw new HttpError(412, `device write requires typed acknowledgement: "${required}"`);
       }
-      const applyResult = await driver.applyLive({ version: latest?.version ?? 0, ir });
+      const commit = mode === "live";
+      const applyResult = await driver.applyLive({ version: latest?.version ?? 0, ir }, { commit });
       let readbackKey: string | null = null;
-      if (applyResult.ok) {
+      if (applyResult.ok && commit) {
         const rb = await driver.readback().catch(() => null);
         if (rb) {
           readbackKey = `readbacks/${projectId}/${runId}.json`;
@@ -474,11 +478,15 @@ export class SessionDO {
         bundle_ref: null,
         readback_ref: readbackKey,
       });
-      await db.setProjectStatus(this.env, projectId, applyResult.ok ? "applied" : "apply-failed");
+      await db.setProjectStatus(
+        this.env,
+        projectId,
+        applyResult.ok ? (commit ? "applied" : "pushed") : "apply-failed",
+      );
       await audit(this.env, {
         projectId,
         actor: this.env.ALLOWED_EMAIL,
-        action: "apply.live",
+        action: `apply.${mode}`,
         target: runId,
         afterRef: readbackKey ?? undefined,
         detail: { ok: applyResult.ok, committed: applyResult.committed, messages: applyResult.messages },

@@ -262,14 +262,17 @@ export interface Validation {
 }
 
 // ---------- apply ----------
-export type ApplyMode = "live" | "staged";
+// staged: render a downloadable bundle · push: write candidate (commit on-box) · live: write + commit
+export type ApplyMode = "staged" | "push" | "live";
 
 export interface ApplyResult {
   ok: boolean;
   mode: ApplyMode;
   bundleRef?: string; // for staged
-  commitId?: string; // for live
+  commitId?: string; // commit job id (live)
+  committed?: boolean;
   message?: string;
+  messages?: string[];
 }
 
 // ---------- verify ----------
