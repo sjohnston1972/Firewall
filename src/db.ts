@@ -58,14 +58,17 @@ export const db = {
     return (res.results ?? []).map((r) => r.raw_ref).filter(Boolean);
   },
 
-  /** Delete all operational rows for a project. Audit log is preserved (§4.1). */
+  /** Delete all operational rows for a project. Audit log is preserved (§4.1).
+   *  Order matters — D1 enforces foreign keys, so children are deleted before
+   *  parents: apply_runs (→ plans, projects) → plans (→ projects) → the rest
+   *  (→ projects) → projects last. */
   async deleteProjectData(env: Env, id: string): Promise<void> {
     await env.DB.batch([
-      env.DB.prepare(`DELETE FROM targets WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM apply_runs WHERE project_id = ?`).bind(id),
       env.DB.prepare(`DELETE FROM plans WHERE project_id = ?`).bind(id),
+      env.DB.prepare(`DELETE FROM targets WHERE project_id = ?`).bind(id),
       env.DB.prepare(`DELETE FROM imports WHERE project_id = ?`).bind(id),
       env.DB.prepare(`DELETE FROM policy_packs WHERE project_id = ?`).bind(id),
-      env.DB.prepare(`DELETE FROM apply_runs WHERE project_id = ?`).bind(id),
       env.DB.prepare(`DELETE FROM projects WHERE id = ?`).bind(id),
     ]);
   },
