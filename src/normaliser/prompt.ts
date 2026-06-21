@@ -94,6 +94,10 @@ SAFETY RULES
   any-source/any-destination/any-service ("any/any") — call it out explicitly.
 - Add a "warning" (severity "warn") for any service or protocol you cannot map
   with confidence, and represent it as protocol "any" with empty ports.
+- For "applications": do NOT invent vendor App-IDs. Leave it empty (control via
+  services/ports) unless the source clearly names well-known apps — and then use
+  generic lowercase names (e.g. "office365", "teams", "webex", "dns"); a
+  deterministic, vendor-specific layer maps and validates these to real App-IDs.
 - NEVER invent or output a PSK, pre-shared key, password, or shared secret. For
   a VPN that uses a PSK, set "pskRef" to a stable reference id (e.g.
   "<tunnel-name>-psk") and add an "info" warning that the secret must be

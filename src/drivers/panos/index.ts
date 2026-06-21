@@ -185,6 +185,60 @@ export class PanosDriver implements FirewallDriver {
     }
   }
 
+  /** Cache of App-ID existence checks against the device's predefined catalogue. */
+  private appCache = new Map<string, boolean>();
+
+  /** Is `id` a real PAN-OS App-ID on this device? (cached predefined lookup) */
+  private async appValid(id: string): Promise<boolean> {
+    if (id === "any" || id === "application-default") return true;
+    const cached = this.appCache.get(id);
+    if (cached !== undefined) return cached;
+    try {
+      const xml = await this.op(
+        `<show><predefined><xpath>/predefined/application/entry[@name='${id}']</xpath></predefined></show>`,
+      );
+      const ok = new RegExp(`name="${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`).test(xml);
+      this.appCache.set(id, ok);
+      return ok;
+    } catch {
+      // If we can't check, keep it — the device's commit will be the final judge.
+      return true;
+    }
+  }
+
+  /** Map + validate a rule's applications to real App-IDs; drop unknowns. */
+  private async resolveApps(apps: string[]): Promise<{ apps: string[]; dropped: string[] }> {
+    const out: string[] = [];
+    const dropped: string[] = [];
+    for (const raw of apps) {
+      const id = aliasApp(raw);
+      if (id === "any") return { apps: ["any"], dropped };
+      if (await this.appValid(id)) out.push(id);
+      else dropped.push(raw);
+    }
+    return { apps: out.length ? [...new Set(out)] : ["any"], dropped };
+  }
+
+  /** Replace each security rule's applications with device-valid App-IDs. */
+  private async sanitizeApplications(ir: IR): Promise<{ ir: IR; notes: string[] }> {
+    const notes: string[] = [];
+    const security = [];
+    for (const r of ir.security) {
+      if (!r.applications?.length) {
+        security.push(r);
+        continue;
+      }
+      const { apps, dropped } = await this.resolveApps(r.applications);
+      if (dropped.length) {
+        notes.push(
+          `Rule "${r.name}": dropped invalid App-ID(s) ${dropped.join(", ")} → using ${apps.join(", ")}.`,
+        );
+      }
+      security.push({ ...r, applications: apps });
+    }
+    return { ir: { ...ir, security }, notes };
+  }
+
   /** Commit the candidate config. Returns the raw XML (job id / status). */
   private async commitConfig(): Promise<string> {
     const key = await this.ensureApiKey();
@@ -429,7 +483,7 @@ export class PanosDriver implements FirewallDriver {
     };
   }
 
-  validate(plan: BuildPlan): Promise<Validation> {
+  async validate(plan: BuildPlan): Promise<Validation> {
     const ir = plan.ir;
     const findings: Validation["findings"] = [];
     const zoneNames = new Set(ir.zones.map((z) => z.name));
@@ -481,8 +535,25 @@ export class PanosDriver implements FirewallDriver {
       }
     }
 
+    // Validate L7 App-IDs against the device's predefined catalogue (best effort
+    // — only when reachable). Flags app names the AI emitted that PAN won't accept.
+    try {
+      for (const rule of ir.security) {
+        if (!rule.applications?.length) continue;
+        const { dropped, apps } = await this.resolveApps(rule.applications);
+        if (dropped.length) {
+          findings.push({
+            severity: "warn",
+            message: `Security rule "${rule.name}": App-ID(s) ${dropped.join(", ")} are not valid on this device — they'll be mapped/dropped to ${apps.join(", ")} on apply.`,
+          });
+        }
+      }
+    } catch {
+      // device unreachable for app validation — skip (apply still sanitizes)
+    }
+
     const ok = !findings.some((f) => f.severity === "error");
-    return Promise.resolve({ ok, findings });
+    return { ok, findings };
   }
 
   render(plan: BuildPlan): Promise<RenderedConfig> {
@@ -501,9 +572,14 @@ export class PanosDriver implements FirewallDriver {
       await this.ensureApiKey();
       const dev = await this.deviceName();
 
+      // Validate/repair L7 App-IDs against the device before pushing — the AI's
+      // app names are intent, not gospel (e.g. "office365" -> "ms-office365-base").
+      const sani = await this.sanitizeApplications(plan.ir);
+      sani.notes.forEach((n) => messages.push(n));
+
       // Push each config section via the config API (action=set). These land in
       // the CANDIDATE config; the commit (if requested) promotes them to running.
-      const ops = renderPanosElements(plan.ir, dev);
+      const ops = renderPanosElements(sani.ir, dev);
       if (ops.length === 0) {
         return { ok: false, committed: false, messages: ["Nothing to push — the plan is empty."] };
       }
@@ -602,6 +678,35 @@ function xmlEsc(s: string): string {
 function members(arr: string[]): string {
   const list = arr.length ? arr : ["any"];
   return list.map((m) => `<member>${xmlEsc(m)}</member>`).join("");
+}
+
+/**
+ * Free-text / loose application names -> verified PAN-OS App-IDs. The AI can't be
+ * trusted to emit exact App-IDs (it produced "office365", which PAN rejects), so
+ * we map the common ones deterministically. All targets below were verified to
+ * exist on PAN-OS 11.2. Anything not aliased is validated live against the device
+ * (see PanosDriver.resolveApps) and dropped if unknown.
+ */
+const APP_ALIASES: Record<string, string> = {
+  http: "web-browsing", web: "web-browsing", "web-browsing": "web-browsing", browsing: "web-browsing",
+  https: "ssl", ssl: "ssl", tls: "ssl",
+  dns: "dns-base", "dns-base": "dns-base",
+  ntp: "ntp-base", "ntp-base": "ntp-base",
+  quic: "quic-base", "quic-base": "quic-base",
+  ssh: "ssh", ping: "ping", icmp: "ping",
+  ldap: "ldap", kerberos: "kerberos", radius: "radius",
+  o365: "ms-office365-base", office365: "ms-office365-base", "ms-office365": "ms-office365-base",
+  microsoft365: "ms-office365-base", m365: "ms-office365-base", "ms-office365-base": "ms-office365-base",
+  teams: "ms-teams", "ms-teams": "ms-teams", "microsoft-teams": "ms-teams", "ms teams": "ms-teams",
+  webex: "webex-base", "webex-base": "webex-base", "webex-meeting": "webex-base",
+  zoom: "zoom-meeting", "zoom-meeting": "zoom-meeting",
+  sharepoint: "sharepoint-online", "sharepoint-online": "sharepoint-online",
+  outlook: "outlook-web-online", onedrive: "ms-onedrive-base",
+};
+
+/** Alias a single app name (pure; lowercased lookup, identity if unknown). */
+function aliasApp(name: string): string {
+  return APP_ALIASES[name.toLowerCase().trim()] ?? name.toLowerCase().trim();
 }
 
 export interface PanosSetOp {
@@ -717,7 +822,7 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         `<to>${members(r.destZones)}</to>` +
         `<source>${members(r.sources)}</source>` +
         `<destination>${members(r.destinations)}</destination>` +
-        `<application>${members(r.applications)}</application>` +
+        `<application>${members(r.applications.map(aliasApp))}</application>` +
         `<service>${svcMembers}</service>` +
         `<action>${action}</action>` +
         `<log-end>${r.log ? "yes" : "no"}</log-end>` +
