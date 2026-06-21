@@ -32,9 +32,13 @@ try { npx wrangler r2 bucket create bastion-storage } catch { Write-Host $_ }
 
 Write-Host "==> Setting ANTHROPIC_API_KEY secret"
 if ($env:ANTHROPIC_API_KEY) {
-  $env:ANTHROPIC_API_KEY | npx wrangler secret put ANTHROPIC_API_KEY
+  # NB: do NOT pipe the value into `wrangler secret put` — PowerShell appends a
+  # trailing newline, which corrupts the x-api-key header. Use secret bulk (JSON).
+  @{ ANTHROPIC_API_KEY = $env:ANTHROPIC_API_KEY } | ConvertTo-Json -Compress |
+    Set-Content -Encoding ascii -NoNewline .secrets.tmp.json
+  try { npx wrangler secret bulk .secrets.tmp.json } finally { Remove-Item .secrets.tmp.json -Force }
 } else {
-  Write-Host "!! ANTHROPIC_API_KEY not in env — run: npx wrangler secret put ANTHROPIC_API_KEY"
+  Write-Host "!! ANTHROPIC_API_KEY not in env — set it with: wrangler secret bulk"
 }
 
 Write-Host "==> Applying D1 migrations (remote)"
