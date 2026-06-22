@@ -82,6 +82,23 @@ export function buildPlan(input: PlanInput): IR {
   base.vpn = mergeByName(base.vpn, frags.flatMap((f) => f.vpn));
   base.routes = mergeByName(base.routes, frags.flatMap((f) => f.routes));
 
+  // Brief-driven addressing: apply the import's per-zone IP/DHCP onto the
+  // engineer's zone↔interface mapping. A fragment interface whose `name` matches
+  // a design interface name applies directly; otherwise it's treated as a ZONE
+  // name and applied to that zone's L3 interface(s). The design never carries the
+  // IPs (the engineer maps zones only), so the import supplies them here.
+  const ifaceZone = new Map<string, string>();
+  for (const z of base.zones) for (const i of z.interfaces) ifaceZone.set(i, z.name);
+  for (const fi of frags.flatMap((f) => f.interfaces)) {
+    const targets = base.interfaces.filter(
+      (bi) => bi.name === fi.name || bi.zone === fi.name || ifaceZone.get(bi.name) === fi.name,
+    );
+    for (const t of targets) {
+      if (fi.addressing && fi.addressing.mode !== "none") t.addressing = fi.addressing;
+      if (fi.dhcpServer) t.dhcpServer = fi.dhcpServer;
+    }
+  }
+
   // Apply policy packs last; applyPacks is itself idempotent + returns a new IR.
   const withPacks = applyPacks(base, input.enabledPacks);
 

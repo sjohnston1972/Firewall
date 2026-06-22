@@ -67,6 +67,14 @@ OUTPUT FORMAT (HARD REQUIREMENT)
         "peerAddress"?: string, "localSubnets": string[], "remoteSubnets": string[],
         "ikeVersion"?: "ikev1" | "ikev2", "pskRef"?: string, "description"?: string }
     ],
+    "routes": [
+      { "name": string, "destination": string, "nexthop"?: string,
+        "interface"?: string }
+    ],
+    "interfaces": [
+      { "name": string, "addressing"?: { "mode": "static"|"dhcp"|"none", "address"?: string },
+        "dhcpServer"?: { "poolStart": string, "poolEnd": string, "gateway"?: string, "dns"?: string[] } }
+    ],
     "warnings": [
       { "item": string, "reason": string,
         "severity": "info" | "warn" | "danger" }
@@ -74,11 +82,23 @@ OUTPUT FORMAT (HARD REQUIREMENT)
   }
 
 SCOPE (WHAT YOU MAY EMIT)
-- ONLY: NAT rules, security/ACL rules, VPN tunnels, and the address/service
-  objects those rules reference.
-- NEVER emit system settings (DNS/NTP/management), zones, interfaces, NGFW
-  profiles, or zone-protection settings — those are out of scope and are owned
-  by the deterministic engine, not by you.
+- NAT rules, security/ACL rules, VPN tunnels, static routes, and the per-zone
+  interface ADDRESSING + DHCP the brief specifies, plus the address/service
+  objects the rules reference.
+- For "interfaces": emit ONLY addressing + DHCP, and use the ZONE NAME as the
+  entry "name" (e.g. "trust", "untrust", "dmz", "guest") when the brief says
+  "the <zone> interface ip = ...". Set addressing.mode "static" with the CIDR.
+  The engine maps these onto the engineer's zone↔interface layout — so do NOT
+  emit physical interface names, link-aggregation/LACP, or zone membership.
+- For "DHCP on all interfaces": emit a dhcpServer for each INTERNAL zone
+  interface (not the untrust/WAN), with a sensible pool inside that subnet
+  (e.g. .100-.200) and gateway = the interface IP.
+- For "routes": "default route via X" -> destination "0.0.0.0/0", nexthop X.
+  A route "via tunnel" (a VPN) -> set "interface" to "tunnel.1" and OMIT nexthop;
+  also emit a matching site-to-site VPN tunnel in "vpn" so the tunnel exists.
+- NEVER emit system settings (DNS/NTP/management), zones, physical interfaces,
+  LACP bundles, NGFW profiles, or zone-protection — those are owned by the
+  deterministic engine and the wizard, not by you.
 - Every name must be 1-63 chars using only letters, digits, spaces, and . _ -
 - Address "value" is an IPv4 address, IPv4 CIDR (e.g. 10.0.0.0/24), or an FQDN.
   Set "kind" to "host" for a single IP, "subnet" for a CIDR, "fqdn" for a name.
@@ -86,6 +106,11 @@ SCOPE (WHAT YOU MAY EMIT)
   For icmp/ip/any protocols leave "ports" as [].
 - If a rule references an object by name, include that object in "addresses" or
   "services" so the fragment is self-contained.
+- NAT translation: for source-NAT "to the WAN/interface address", set
+  "translatedSource" to the literal "interface". For source-NAT to a specific IP,
+  set "translatedSource" to that IP. For a static destination-NAT (publish an
+  inside host on a public IP), use type "static", "translatedDest" the inside IP,
+  and "originalDest" the public address object.
 
 SAFETY RULES
 - Do NOT guess. If something is ambiguous, unrecognised, or risky, still emit

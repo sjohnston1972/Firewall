@@ -268,6 +268,11 @@ export const IRFragment = z.object({
   security: z.array(SecurityRule).default([]),
   vpn: z.array(VpnTunnel).default([]),
   routes: z.array(StaticRoute).default([]),
+  // Full-build brief mode: the brief carries per-zone IP addressing + DHCP that
+  // the engine applies onto the engineer's zone↔interface mapping. Each entry's
+  // `name` is a ZONE name (e.g. "trust") or an interface name; `zone` may also be
+  // set. Empty for ordinary NAT/ACL imports. Human-reviewed before it joins a plan.
+  interfaces: z.array(Interface).default([]),
   // items the normaliser couldn't confidently convert — surfaced to the human
   warnings: z
     .array(

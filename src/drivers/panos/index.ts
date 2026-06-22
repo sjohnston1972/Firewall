@@ -997,22 +997,8 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     });
   }
 
-  // ----- static routes (under the default VR) -----
-  const routes = ir.routes
-    .map((r) => {
-      const nh = r.nexthop ? `<nexthop><ip-address>${xmlEsc(r.nexthop)}</ip-address></nexthop>` : "";
-      const intf = r.interface ? `<interface>${xmlEsc(r.interface)}</interface>` : "";
-      const metric = r.metric ? `<metric>${r.metric}</metric>` : "";
-      return `<entry name="${xmlEsc(r.name)}"><destination>${xmlEsc(r.destination)}</destination>${nh}${intf}${metric}</entry>`;
-    })
-    .join("");
-  if (routes) {
-    ops.push({
-      label: "static routes",
-      xpath: `${D}/network/virtual-router/entry[@name='default']/routing-table/ip/static-route`,
-      element: routes,
-    });
-  }
+  // Static routes are rendered AFTER the VPN section so routes that point at a
+  // tunnel interface ("VPN-route via tunnel.1") reference an existing interface.
 
   // ----- address objects -----
   const addr = ir.addresses
@@ -1208,7 +1194,14 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
   if (dhcp) ops.push({ label: "DHCP server", xpath: `${D}/network/dhcp/interface`, element: dhcp });
 
   // ----- VPN: IPSec site-to-site + GlobalProtect remote-access -----
-  if (ir.vpn.length) {
+  // Tunnel interfaces referenced by static routes ("VPN-route via tunnel") must
+  // exist even if the matching IPSec tunnel has no peer yet.
+  const routeTunnels = new Set(
+    ir.routes
+      .map((r) => r.interface)
+      .filter((i): i is string => !!i && /^tunnel\.\d+$/i.test(i)),
+  );
+  if (ir.vpn.length || routeTunnels.size) {
     const wanIface =
       ir.zones.find((z) => z.type === "untrust")?.interfaces[0] ??
       ir.interfaces.find((i) => /^(ethernet|ae)/i.test(i.name) && !i.aggregateGroup)?.name ??
@@ -1229,12 +1222,15 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
     // tunnel interface.
     const tif = new Map<string, string>();
     s2s.forEach((v, idx) => tif.set(v.name, `tunnel.${idx + 1}`));
-    if (tif.size) {
-      const members = [...tif.values()].map((t) => `<member>${t}</member>`).join("");
+    // Union of IPSec tunnel interfaces and any tunnel referenced by a route.
+    const tunnelSet = new Set<string>([...tif.values(), ...routeTunnels]);
+    if (tunnelSet.size) {
+      const tlist = [...tunnelSet];
+      const members = tlist.map((t) => `<member>${t}</member>`).join("");
       ops.push({
         label: "VPN tunnel interfaces",
         xpath: `${D}/network/interface/tunnel/units`,
-        element: [...tif.values()].map((t) => `<entry name="${t}"/>`).join(""),
+        element: tlist.map((t) => `<entry name="${t}"/>`).join(""),
       });
       ops.push({
         label: "VPN router binding",
@@ -1310,6 +1306,23 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         });
       }
     }
+  }
+
+  // ----- static routes (after interfaces/VPN so tunnel routes resolve) -----
+  const routes = ir.routes
+    .map((r) => {
+      const nh = r.nexthop ? `<nexthop><ip-address>${xmlEsc(r.nexthop)}</ip-address></nexthop>` : "";
+      const intf = r.interface ? `<interface>${xmlEsc(r.interface)}</interface>` : "";
+      const metric = r.metric ? `<metric>${r.metric}</metric>` : "";
+      return `<entry name="${xmlEsc(r.name)}"><destination>${xmlEsc(r.destination)}</destination>${nh}${intf}${metric}</entry>`;
+    })
+    .join("");
+  if (routes) {
+    ops.push({
+      label: "static routes",
+      xpath: `${D}/network/virtual-router/entry[@name='default']/routing-table/ip/static-route`,
+      element: routes,
+    });
   }
 
   return ops;
