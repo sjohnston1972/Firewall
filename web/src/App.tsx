@@ -86,21 +86,23 @@ function initialState(): WizardState {
     },
     imports: [],
     packs: [],
+    // All NGFW features on by default EXCEPT TLS decryption (needs a cert).
     ngfw: {
       ips: true,
       antiMalware: true,
-      sandboxing: false,
+      sandboxing: true,
       urlFiltering: true,
       dnsSecurity: true,
       tlsDecryption: false,
     },
+    // All hardening / zone-protection on by default.
     protection: {
       floodProtection: true,
       reconProtection: true,
       packetBasedAttackProtection: true,
       antiSpoofing: true,
       bogonFiltering: true,
-      rfc1918EgressFilter: false,
+      rfc1918EgressFilter: true,
     },
     plan: null,
     validation: null,

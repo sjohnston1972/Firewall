@@ -10,7 +10,35 @@ export function VerifyStep({ state, patch, onBack, step, total }: StepProps) {
   const [reading, setReading] = useState(false);
   const [rolling, setRolling] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [report, setReport] = useState<string | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
   const result = state.verifyResult;
+
+  const loadReport = async () => {
+    if (!state.sessionId) return;
+    setLoadingReport(true);
+    setNote(null);
+    try {
+      const blob = await api.report(state.sessionId);
+      setReport(await blob.text());
+    } catch (e) {
+      setNote(e instanceof ApiError ? e.message : "Could not generate the build report.");
+    } finally {
+      setLoadingReport(false);
+    }
+  };
+
+  const downloadReport = () => {
+    if (!report) return;
+    const url = URL.createObjectURL(new Blob([report], { type: "text/markdown" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bastion-report-${(state.sessionId ?? "run").slice(4, 12)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
 
   const readBack = async () => {
     setNote(null);
@@ -42,10 +70,6 @@ export function VerifyStep({ state, patch, onBack, step, total }: StepProps) {
     }
   };
 
-  const openReport = () => {
-    if (state.sessionId) window.open(api.reportUrl(state.sessionId), "_blank", "noopener");
-  };
-
   const matched = result?.rows.filter((r) => r.match).length ?? 0;
   const mismatched = (result?.rows.length ?? 0) - matched;
 
@@ -68,8 +92,8 @@ export function VerifyStep({ state, patch, onBack, step, total }: StepProps) {
               <Button variant="primary" onClick={readBack} loading={reading}>
                 {result ? "Re-read" : "Read device back"}
               </Button>
-              <Button variant="ghost" onClick={openReport}>
-                Build report ↗
+              <Button variant="ghost" onClick={loadReport} loading={loadingReport}>
+                Build report
               </Button>
             </div>
           }
@@ -135,6 +159,26 @@ export function VerifyStep({ state, patch, onBack, step, total }: StepProps) {
           )}
         </CardBody>
       </Card>
+
+      {report && (
+        <Card>
+          <CardHeader
+            eyebrow="End-of-run summary"
+            title="Build report"
+            description="How each brief item, policy pack and NGFW feature was met — plus placeholders and follow-up config."
+            action={
+              <Button variant="subtle" size="sm" onClick={downloadReport}>
+                ↓ Download .md
+              </Button>
+            }
+          />
+          <CardBody>
+            <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-lg border border-ink-700 bg-ink-950 p-4 text-[11px] leading-relaxed text-slate-200">
+              {report}
+            </pre>
+          </CardBody>
+        </Card>
+      )}
 
       <Card className="border-bad/30">
         <CardHeader

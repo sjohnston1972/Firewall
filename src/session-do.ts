@@ -21,6 +21,7 @@ import type {
 import { getContainer } from "@cloudflare/containers";
 import { normalise } from "./normaliser";
 import { buildPlan, diffIR } from "./plan/engine";
+import { buildReport, renderReportMarkdown } from "./report/build";
 import { db, uid, nowIso } from "./db";
 import { audit } from "./audit";
 
@@ -31,6 +32,7 @@ interface SessionState {
   design?: Partial<IRType>;
   lastDiscoveryRef?: string;
   backupRef?: string;
+  lastApply?: { committed: boolean; mode: string };
 }
 
 interface PendingRelay {
@@ -461,6 +463,8 @@ export class SessionDO {
       }
       const commit = mode === "live";
       const applyResult = await driver.applyLive({ version: latest?.version ?? 0, ir }, { commit });
+      this.mem.lastApply = { committed: !!applyResult.committed, mode };
+      await this.persist();
       let readbackKey: string | null = null;
       if (applyResult.ok && commit) {
         const rb = await driver.readback().catch(() => null);
@@ -559,30 +563,15 @@ export class SessionDO {
   private async report(): Promise<Response> {
     const projectId = this.requireProject();
     const ir = await this.assemblePlan();
-    const lines: string[] = [];
-    lines.push(`# Bastion Build Report`);
-    lines.push(`Project: ${projectId}`);
-    lines.push(`Vendor: ${ir.meta.vendor}`);
-    lines.push(`Generated: ${nowIso()}`);
-    lines.push(``);
-    lines.push(`## System`);
-    lines.push(`Hostname: ${ir.system.hostname ?? "(unset)"}`);
-    lines.push(`DNS: ${ir.system.dns.join(", ") || "(none)"}`);
-    lines.push(`NTP: ${ir.system.ntp.join(", ") || "(none)"}`);
-    lines.push(``);
-    lines.push(`## Counts`);
-    lines.push(`Interfaces: ${ir.interfaces.length}`);
-    lines.push(`Zones: ${ir.zones.length}`);
-    lines.push(`Address objects: ${ir.addresses.length}`);
-    lines.push(`Service objects: ${ir.services.length}`);
-    lines.push(`NAT rules: ${ir.nat.length}`);
-    lines.push(`Security rules: ${ir.security.length}`);
-    lines.push(`VPN tunnels: ${ir.vpn.length}`);
-    lines.push(`NGFW profiles: ${ir.ngfw.length}`);
-    const reportText = lines.join("\n");
+    const enabledPacks = await db.enabledPacks(this.env, projectId);
+    // Was the most recent apply a successful commit?
+    const lastApply = this.mem.lastApply;
+    const committed = !!lastApply?.committed;
+    const report = buildReport({ ir, enabledPacks, committed, generatedAt: nowIso() });
+    const reportText = renderReportMarkdown(report);
     const key = `reports/${projectId}/report-${nowIso()}.md`;
     await this.env.R2.put(key, reportText);
-    return json({ reportRef: key, report: reportText });
+    return json({ reportRef: key, report: reportText, structured: report });
   }
 
   // ---------- relay agent WSS ----------

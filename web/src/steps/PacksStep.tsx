@@ -7,30 +7,40 @@ import { ToggleCard } from "../components/Toggle";
 import { StatusBadge } from "../components/StatusBadge";
 import type { PackCategory, PolicyPack } from "../types";
 
-/** Fallback catalogue (CLAUDE.md §7) used when the API isn't reachable. */
+/** Fallback catalogue (CLAUDE.md §7) used when the API isn't reachable — IDs and
+ * names mirror the backend catalogue (src/packs/catalogue.ts). All on by default. */
 const FALLBACK_PACKS: PolicyPack[] = [
-  // connectivity
-  { id: "outbound-baseline", name: "Outbound internet baseline", category: "connectivity", description: "HTTP/HTTPS/QUIC, DNS, NTP — with logging.", enabled: true },
-  { id: "o365", name: "Microsoft 365 / Teams", category: "connectivity", description: "Built from Microsoft's published O365 endpoint list.", enabled: false },
-  { id: "webex", name: "Webex", category: "connectivity", description: "From Cisco's published Webex media + signalling requirements.", enabled: false },
-  { id: "zoom", name: "Zoom", category: "connectivity", description: "Zoom media and signalling ranges.", enabled: false },
-  { id: "google-meet", name: "Google Workspace / Meet", category: "connectivity", description: "Workspace and Meet endpoints.", enabled: false },
-  { id: "os-updates", name: "Software & OS updates", category: "connectivity", description: "Windows Update, Apple, common vendor update servers.", enabled: false },
-  { id: "cert-validation", name: "Certificate validation", category: "connectivity", description: "OCSP / CRL access for cert checking.", enabled: true },
-  // security
-  { id: "anti-spoof", name: "Anti-spoofing / bogon egress", category: "security", description: "RFC1918 and bogon egress filtering.", enabled: true },
-  { id: "geo-block", name: "Geo-blocking", category: "security", description: "Block high-risk source countries inbound.", enabled: false },
-  { id: "rogue-doh", name: "Rogue DoH control", category: "security", description: "Block unsanctioned DNS-over-HTTPS.", enabled: false },
-  { id: "cloud-services", name: "Firewall cloud-services allow", category: "security", description: "Reach WildFire / FortiGuard / Talos update clouds.", enabled: true },
-  { id: "siem-egress", name: "Logging / SIEM egress", category: "security", description: "Syslog to a defined collector.", enabled: false },
-  { id: "internal-services", name: "Internal services", category: "security", description: "DNS, DHCP relay, NTP, AAA/RADIUS, SNMP to defined hosts.", enabled: false },
-  // access
-  { id: "ra-vpn", name: "Remote-access VPN baseline", category: "access", description: "GlobalProtect / FortiClient / AnyConnect skeleton.", enabled: false },
-  { id: "s2s-vpn", name: "Site-to-site VPN baseline", category: "access", description: "Strong crypto defaults, named tunnels.", enabled: false },
-  { id: "guest-isolation", name: "Guest / DMZ isolation", category: "access", description: "Segment with no lateral access to trust.", enabled: false },
-  // management
-  { id: "mgmt-lockdown", name: "Mgmt plane lockdown", category: "management", description: "Restrict admin to named subnets; HTTPS/SSH only; no Telnet/HTTP.", enabled: true },
+  { id: "outbound-internet-baseline", name: "Outbound internet baseline", category: "connectivity", description: "Allow trust→untrust web, DNS and NTP (HTTP/HTTPS/QUIC) with logging.", enabled: true },
+  { id: "microsoft-365", name: "Microsoft 365 / Teams", category: "connectivity", description: "Allow Exchange, SharePoint and Teams (signalling + media).", enabled: true },
+  { id: "webex", name: "Webex", category: "connectivity", description: "Allow Webex media + signalling per Cisco's published requirements.", enabled: true },
+  { id: "certificate-validation", name: "Certificate validation (OCSP/CRL)", category: "connectivity", description: "Allow outbound OCSP/CRL so certificate revocation checks succeed.", enabled: true },
+  { id: "anti-spoofing-bogon", name: "Anti-spoofing / bogon filtering", category: "security", description: "Anti-spoofing + bogon filtering and drop RFC1918 egress.", enabled: true },
+  { id: "geo-blocking", name: "Geo-blocking (high-risk countries)", category: "security", description: "Block inbound from high-risk source countries.", enabled: true },
+  { id: "rogue-doh-control", name: "Rogue DoH control", category: "security", description: "Block unsanctioned DNS-over-HTTPS/TLS to public resolvers.", enabled: true },
+  { id: "firewall-cloud-services", name: "Firewall cloud-services allow", category: "security", description: "Reach WildFire / FortiGuard / Talos update clouds.", enabled: true },
+  { id: "logging-siem-egress", name: "Logging / SIEM egress", category: "security", description: "Allow syslog to a defined collector (UDP 514 / TLS 6514).", enabled: true },
+  { id: "site-to-site-vpn-baseline", name: "Site-to-site VPN baseline", category: "access", description: "IKEv2 IPSec tunnel skeleton with strong crypto defaults.", enabled: true },
+  { id: "remote-access-vpn-baseline", name: "Remote-access VPN baseline", category: "access", description: "GlobalProtect gateway + portal skeleton.", enabled: true },
+  { id: "guest-dmz-isolation", name: "Guest / DMZ isolation", category: "access", description: "Segment guest/DMZ with no lateral access to trust.", enabled: true },
+  { id: "mgmt-plane-lockdown", name: "Management plane lockdown", category: "management", description: "Restrict admin to named subnets; HTTPS/SSH only; no Telnet/HTTP.", enabled: true },
 ];
+
+/** Rich hover detail per pack — what it deploys + any placeholders/follow-ups. */
+const PACK_DETAIL: Record<string, string> = {
+  "outbound-internet-baseline": "Adds an allow rule from trust to untrust for web-browsing, SSL, QUIC, DNS and NTP, all logged. The baseline that lets internal users reach the internet.",
+  "microsoft-365": "Allows the Microsoft 365 App-IDs (Exchange Online, SharePoint, Teams) including Teams media UDP 3478–3481. Built from Microsoft's published endpoint categories.",
+  webex: "Allows Webex signalling and media per Cisco's published network requirements so meetings connect with good media quality.",
+  "certificate-validation": "Permits outbound OCSP and CRL fetches (HTTP/HTTPS) so TLS certificate revocation checks don't fail closed.",
+  "anti-spoofing-bogon": "Enables zone-protection anti-spoofing and drops bogon/RFC1918 source addresses leaving the WAN — basic egress hygiene.",
+  "geo-blocking": "Drops inbound connections sourced from a set of high-risk countries (matched by ISO country code on the untrust zone).",
+  "rogue-doh-control": "Blocks DNS-over-HTTPS / DNS-over-TLS to well-known public resolvers so clients can't bypass your DNS policy.",
+  "firewall-cloud-services": "Allows the firewall to reach its own threat-intel and update clouds (PAN WildFire, FortiGuard, Cisco Talos) so signatures stay current.",
+  "logging-siem-egress": "Allows syslog egress to a SIEM collector (UDP 514 / TLS 6514). PLACEHOLDER collector host — set your real SIEM address.",
+  "site-to-site-vpn-baseline": "Deploys IKE + IPSec crypto profiles, an IKE gateway and an IPSec tunnel with strong IKEv2 defaults. PLACEHOLDER peer + PSK — replace per site.",
+  "remote-access-vpn-baseline": "Deploys a GlobalProtect gateway + portal, an SSL/TLS service profile and local-database auth. PLACEHOLDER self-signed cert + sample user — replace with a real cert and authentication.",
+  "guest-dmz-isolation": "Adds deny rules so guest and DMZ zones cannot initiate into trust (lateral-movement containment).",
+  "mgmt-plane-lockdown": "Restricts the management plane to named admin subnets, forces HTTPS/SSH only, disables Telnet/HTTP and sets an admin lockout. Narrow the permitted sources to your real admin network.",
+};
 
 const CATEGORY_META: { key: PackCategory; label: string; blurb: string }[] = [
   { key: "connectivity", label: "Connectivity / productivity", blurb: "Let known-good traffic through" },
@@ -51,11 +61,13 @@ export function PacksStep({ state, patch, onNext, onBack, step, total }: StepPro
       try {
         if (!state.sessionId) throw new Error("no session");
         const res = await api.packs(state.sessionId);
-        if (!cancelled) patch({ packs: res.packs?.length ? res.packs : FALLBACK_PACKS });
+        // ALL packs are selected by default — the engineer opts out, not in.
+        const list = (res.packs?.length ? res.packs : FALLBACK_PACKS).map((p) => ({ ...p, enabled: true }));
+        if (!cancelled) patch({ packs: list });
         if (!cancelled && !res.packs?.length) setUsingFallback(true);
       } catch {
         if (!cancelled) {
-          patch({ packs: FALLBACK_PACKS });
+          patch({ packs: FALLBACK_PACKS.map((p) => ({ ...p, enabled: true })) });
           setUsingFallback(true);
         }
       } finally {
@@ -111,6 +123,7 @@ export function PacksStep({ state, patch, onNext, onBack, step, total }: StepPro
                         key={p.id}
                         title={p.name}
                         description={p.description}
+                        detail={PACK_DETAIL[p.id]}
                         checked={p.enabled}
                         onChange={(v) => toggle(p.id, v)}
                       />

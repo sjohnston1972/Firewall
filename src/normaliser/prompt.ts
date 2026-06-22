@@ -96,6 +96,13 @@ SCOPE (WHAT YOU MAY EMIT)
 - For "routes": "default route via X" -> destination "0.0.0.0/0", nexthop X.
   A route "via tunnel" (a VPN) -> set "interface" to "tunnel.1" and OMIT nexthop;
   also emit a matching site-to-site VPN tunnel in "vpn" so the tunnel exists.
+- VPN placeholders: when the brief implies a VPN but does not give the peer or
+  PSK, STILL emit a complete tunnel using PLACEHOLDER values — set "peerAddress"
+  to a placeholder public IP (e.g. "198.51.100.1") and "pskRef" to
+  "<tunnel-name>-psk", and add an "info" warning that the peer and PSK are
+  placeholders that must be replaced. A complete-with-placeholders tunnel is
+  required so the IKE/IPSec crypto profiles, IKE gateway and IPSec tunnel all
+  deploy.
 - NEVER emit system settings (DNS/NTP/management), zones, physical interfaces,
   LACP bundles, NGFW profiles, or zone-protection — those are owned by the
   deterministic engine and the wizard, not by you.

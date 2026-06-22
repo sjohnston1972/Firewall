@@ -1,0 +1,32 @@
+Branch office firewall.
+Zones: trust, untrust, dmz, guest
+Addressing:
+- trust interface ip = 10.10.10.1/24
+- untrust/WAN interface ip = 213.12.12.1/24
+- dmz interface ip = 10.10.20.1/24
+- guest interface ip = 192.168.10.1/24
+Interfaces:
+- trust interface should be lacp bundle comprising of 2 ports
+Outbound internet access:
+- trust users browse the internet (HTTP, HTTPS, O365, Teams, Webex) out via untrust, source-NAT to the WAN interface address.
+- dmz hosts may reach the internet for updates (HTTP, HTTPS) via untrust, source-NAT to WAN.
+- guest users browse the internet (HTTP, HTTPS, O365, Teams, Webex) out via untrust, source-NAT to an ip in the untrust public subnet 213.12.12.7
+Inbound:
+- Publish the DMZ web server 10.10.20.10 to the internet on 203.0.113.10 port 443 (static destination NAT). Allow HTTPS from any to the web server.
+Segmentation:
+- dmz must NOT reach trust (deny dmz -> trust).
+- guest must NOT reach trust or dmz (deny guest -> trust / dmz).
+- explicit default deny at the end of the rulebase, with logging.
+Objects:
+- web-server = 10.10.20.10
+- web-server-public = 203.0.113.10
+- trust-net = 10.10.10.0/24
+- dmz-net = 10.10.20.0/24
+- guest-net = 192.168.10.0/24
+Services:
+- DHCP on all interface
+Routing:
+- print-server = 172.16.12.1 via 10.10.10.20
+- default route via 213.12.12.254
+- VPN-route1 = 10.220.12.0/24 via tunnel
+- VPN-route2 = 10.220.14.0/24 via tunnel

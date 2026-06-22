@@ -40,16 +40,19 @@ interface ToggleCardProps {
   checked: boolean;
   onChange: (next: boolean) => void;
   tag?: string;
+  /** rich hover detail — shown as a tooltip on hover/focus */
+  detail?: string;
 }
 
-export function ToggleCard({ title, description, checked, onChange, tag }: ToggleCardProps) {
+export function ToggleCard({ title, description, checked, onChange, tag, detail }: ToggleCardProps) {
   return (
     <button
       type="button"
       onClick={() => onChange(!checked)}
       aria-pressed={checked}
+      title={detail}
       className={
-        "group flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all duration-200 " +
+        "group relative flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-all duration-200 " +
         (checked
           ? "border-accent bg-accent-soft/40 shadow-[0_0_0_1px_rgba(79,156,249,0.55),0_0_24px_-6px_rgba(79,156,249,0.65)]"
           : "border-ink-700 bg-ink-900/50 hover:border-ink-600 hover:bg-ink-800/50")
@@ -71,11 +74,20 @@ export function ToggleCard({ title, description, checked, onChange, tag }: Toggl
               {tag}
             </span>
           )}
+          {detail && <span className="ml-auto text-[11px] text-ink-600 group-hover:text-accent">ⓘ</span>}
         </span>
         <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">
           {description}
         </span>
       </span>
+      {detail && (
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute left-2 right-2 top-full z-30 mt-1 hidden rounded-md border border-ink-600 bg-ink-950/98 p-2.5 text-[11px] leading-relaxed text-slate-200 shadow-xl group-hover:block group-focus-visible:block"
+        >
+          {detail}
+        </span>
+      )}
     </button>
   );
 }
