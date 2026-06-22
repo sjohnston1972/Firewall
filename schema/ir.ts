@@ -116,6 +116,8 @@ export const AddressObject = z.object({
   name: name,
   value: z.union([ipv4, cidr, hostname]),
   kind: z.enum(["host", "subnet", "fqdn"]).default("subnet"),
+  // coloured administrative tags (zone names or custom keywords)
+  tags: z.array(name).optional(),
 });
 export type AddressObject = z.infer<typeof AddressObject>;
 
@@ -162,6 +164,8 @@ export const SecurityRule = z.object({
   disabled: z.boolean().default(false),
   // attach NGFW profiles (see ngfw) by name
   profiles: z.array(z.string()).default([]),
+  // coloured administrative tags (custom keywords); zone tags are auto-added
+  tags: z.array(name).optional(),
   description: z.string().max(255).optional(),
   // provenance: which policy pack / import produced this rule
   origin: z.string().optional(),

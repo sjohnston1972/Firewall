@@ -181,6 +181,26 @@ export function buildReport(input: {
   });
   sections.push({ title: "NGFW & hardening", rows: ngRows });
 
+  // ---- Coloured tags (default on) ----
+  const ZONE_COLOR_NAME: Record<string, string> = {
+    trust: "green",
+    untrust: "red",
+    dmz: "orange",
+    guest: "yellow",
+    custom: "blue",
+  };
+  const tagRows: ReportRow[] = ir.zones.map((z) => ({
+    item: z.name,
+    status: "deployed" as const,
+    detail: `zone tag — ${ZONE_COLOR_NAME[z.type] ?? "blue"}; applied to every policy that uses this zone`,
+  }));
+  const customTags = new Set<string>();
+  for (const r of ir.security) for (const t of r.tags ?? []) customTags.add(t);
+  for (const a of ir.addresses) for (const t of a.tags ?? []) customTags.add(t);
+  for (const t of customTags) tagRows.push({ item: t, status: "deployed", detail: "custom keyword tag (auto-coloured)" });
+  if (ir.vpn.length) tagRows.push({ item: "vpn", status: "deployed", detail: "zone tag — purple" });
+  sections.push({ title: "Coloured tags", rows: tagRows });
+
   // ---- Policy packs ----
   sections.push({
     title: "Policy packs",

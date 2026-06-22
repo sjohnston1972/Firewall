@@ -877,6 +877,23 @@ function isIfaceName(s: string): boolean {
   return /^(ethernet|ae|vlan|tunnel|loopback)[\d./]*$/i.test(s);
 }
 
+/** PAN-OS administrative-tag colours. By default zones are tagged so policies
+ *  are colour-coded: trust=green, untrust=red, dmz=orange, guest=yellow. */
+const ZONE_TAG_COLOR: Record<string, string> = {
+  trust: "color2", // green
+  untrust: "color1", // red
+  dmz: "color6", // orange
+  guest: "color4", // yellow
+  custom: "color3", // blue
+};
+const KEYWORD_PALETTE = ["color3", "color7", "color5", "color10", "color13", "color15", "color16", "color8"];
+/** Deterministic colour for a custom keyword tag (distinct from zone colours). */
+function keywordColor(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return KEYWORD_PALETTE[h % KEYWORD_PALETTE.length];
+}
+
 /** Convert a CIDR (10.0.0.1/24) to a dotted netmask (255.255.255.0). */
 function cidrToMask(cidr: string): string {
   const bits = Number(cidr.split("/")[1] ?? 24);
@@ -1000,14 +1017,34 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
   // Static routes are rendered AFTER the VPN section so routes that point at a
   // tunnel interface ("VPN-route via tunnel.1") reference an existing interface.
 
-  // ----- address objects -----
+  // ----- coloured administrative tags (default ON) -----
+  // Every zone becomes a coloured tag (trust=green, untrust=red, dmz=orange,
+  // guest=yellow), plus any custom keyword tags referenced by rules/objects.
+  // Tag objects must exist before the rules/addresses that reference them.
+  const tagColor = new Map<string, string>();
+  for (const z of ir.zones) tagColor.set(z.name, ZONE_TAG_COLOR[z.type] ?? ZONE_TAG_COLOR.custom);
+  if (ir.vpn.length || ir.routes.some((r) => /^tunnel\./i.test(r.interface ?? "")))
+    tagColor.set("vpn", "color7"); // purple
+  for (const r of ir.security) for (const t of r.tags ?? []) if (!tagColor.has(t)) tagColor.set(t, keywordColor(t));
+  for (const a of ir.addresses) for (const t of a.tags ?? []) if (!tagColor.has(t)) tagColor.set(t, keywordColor(t));
+  const tagEl = [...tagColor.entries()]
+    .map(([n, c]) => `<entry name="${xmlEsc(n)}"><color>${c}</color><comments>Bastion tag</comments></entry>`)
+    .join("");
+  if (tagEl) ops.push({ label: "tags (coloured)", xpath: `${V}/tag`, element: tagEl });
+  // Helper: tag members for an entity (filters to known tags, drops "any").
+  const tagXml = (...names: string[]): string => {
+    const list = [...new Set(names)].filter((t) => t && t !== "any" && tagColor.has(t));
+    return list.length ? `<tag>${list.map((t) => `<member>${xmlEsc(t)}</member>`).join("")}</tag>` : "";
+  };
+
+  // ----- address objects (tagged) -----
   const addr = ir.addresses
     .map((a) => {
       const v =
         a.kind === "fqdn"
           ? `<fqdn>${xmlEsc(a.value)}</fqdn>`
           : `<ip-netmask>${xmlEsc(a.value)}</ip-netmask>`;
-      return `<entry name="${xmlEsc(a.name)}">${v}</entry>`;
+      return `<entry name="${xmlEsc(a.name)}">${v}${tagXml(...(a.tags ?? []))}</entry>`;
     })
     .join("");
   if (addr) ops.push({ label: "address objects", xpath: `${V}/address`, element: addr });
@@ -1106,6 +1143,8 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         action === "allow" && NGFW_GROUP
           ? `<profile-setting><group><member>${NGFW_GROUP}</member></group></profile-setting>`
           : "";
+      // Colour-code the rule by its source + dest zones (and any custom tags).
+      const ruleTags = tagXml(...r.sourceZones, ...r.destZones, ...(r.tags ?? []));
       return (
         `<entry name="${xmlEsc(r.name)}">` +
         `<from>${members(r.sourceZones)}</from>` +
@@ -1117,6 +1156,7 @@ export function renderPanosElements(ir: IR, dev: string): PanosSetOp[] {
         `<action>${action}</action>` +
         profile +
         `<log-end>${r.log ? "yes" : "no"}</log-end>` +
+        ruleTags +
         (r.disabled ? "<disabled>yes</disabled>" : "") +
         `</entry>`
       );

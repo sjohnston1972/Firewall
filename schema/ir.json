@@ -320,6 +320,15 @@
                       "fqdn"
                     ],
                     "default": "subnet"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 63,
+                      "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                    }
                   }
                 },
                 "required": [
@@ -555,6 +564,15 @@
                       "type": "string"
                     },
                     "default": []
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 63,
+                      "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                    }
                   },
                   "description": {
                     "type": "string",
@@ -958,6 +976,15 @@
                       "fqdn"
                     ],
                     "default": "subnet"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 63,
+                      "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                    }
                   }
                 },
                 "required": [
@@ -1193,6 +1220,15 @@
                       "type": "string"
                     },
                     "default": []
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 63,
+                      "pattern": "^[A-Za-z0-9_.\\-/ ]+$"
+                    }
                   },
                   "description": {
                     "type": "string",

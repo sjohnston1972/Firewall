@@ -113,6 +113,12 @@ SCOPE (WHAT YOU MAY EMIT)
   For icmp/ip/any protocols leave "ports" as [].
 - If a rule references an object by name, include that object in "addresses" or
   "services" so the fragment is self-contained.
+- Coloured tags: the engine auto-tags every rule by its zones (trust=green,
+  untrust=red, dmz=orange, guest=yellow). You MAY additionally set "tags" (an
+  array of short keywords, e.g. "web-tier", "pci", "vpn") on a security rule or
+  address object where the brief implies an operational grouping — these become
+  coloured tags so operators can spot related policy at a glance. Don't invent
+  groupings the brief doesn't suggest.
 - NAT translation: for source-NAT "to the WAN/interface address", set
   "translatedSource" to the literal "interface". For source-NAT to a specific IP,
   set "translatedSource" to that IP. For a static destination-NAT (publish an
