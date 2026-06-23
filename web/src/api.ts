@@ -137,6 +137,16 @@ function mapDesign(
         : undefined;
     interfaces.push({ name, enabled: true, zone, addressing: resolveAddr(name, zone), dhcpServer });
   }
+  // Aggregate (ae<n>) interfaces that aren't mapped to a zone are still emitted,
+  // so their LACP members reference a real aggregate (otherwise the push fails
+  // with "aggregate-group aeN is not a valid reference").
+  const emitted = new Set(interfaces.map((i) => i.name as string));
+  for (const ag of design.aggregates ?? []) {
+    if (!emitted.has(ag.name)) {
+      interfaces.push({ name: ag.name, enabled: true, addressing: resolveAddr(ag.name, "") });
+      emitted.add(ag.name);
+    }
+  }
   // LACP member ethernets — carry aggregate-group, no addressing/zone of their own
   for (const [member, aeName] of memberToAe.entries()) {
     interfaces.push({ name: member, enabled: true, aggregateGroup: aeName });

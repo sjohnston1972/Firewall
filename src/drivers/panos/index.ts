@@ -553,6 +553,40 @@ export class PanosDriver implements FirewallDriver {
     const zoneNames = new Set(ir.zones.map((z) => z.name));
     const ifaceNames = new Set(ir.interfaces.map((i) => i.name));
 
+    // BLOCKING: a bundled interface whose aggregate (ae<n>) doesn't exist — the
+    // push fails hard ("aggregate-group is not a valid reference").
+    const aeNames = new Set(
+      ir.interfaces.filter((i) => /^ae\d+$/i.test(i.name)).map((i) => i.name),
+    );
+    for (const i of ir.interfaces) {
+      if (i.aggregateGroup && !aeNames.has(i.aggregateGroup)) {
+        findings.push({
+          severity: "error",
+          message: `Interface "${i.name}" is bundled into "${i.aggregateGroup}", but that aggregate interface isn't defined — the push will fail. Map the ${i.aggregateGroup} bundle to a zone in the Design step.`,
+        });
+      }
+    }
+    // BLOCKING: no zones at all, but there is policy to apply — every rule would
+    // be skipped, leaving an empty policy.
+    if (ir.zones.length === 0 && (ir.security.length > 0 || ir.nat.length > 0)) {
+      findings.push({
+        severity: "error",
+        message: `No zones are defined, but ${ir.security.length} security and ${ir.nat.length} NAT rules reference zones — ALL of them will be skipped. Add zones and map interfaces to them in the Design step.`,
+      });
+    }
+    // BLOCKING: every security rule references an undefined zone — empty policy.
+    const allSkipped =
+      ir.security.length > 0 &&
+      ir.security.every((r) =>
+        [...r.sourceZones, ...r.destZones].some((z) => z !== "any" && !zoneNames.has(z)),
+      );
+    if (allSkipped && ir.zones.length > 0) {
+      findings.push({
+        severity: "error",
+        message: `All ${ir.security.length} security rules reference zones that aren't defined — the deployed policy would be empty. Define the referenced zones in Design.`,
+      });
+    }
+
     // Zones must reference interfaces that exist in the plan.
     for (const z of ir.zones) {
       for (const member of z.interfaces) {
@@ -666,7 +700,41 @@ export class PanosDriver implements FirewallDriver {
       // validate/repair L7 App-IDs against the device (the AI's app names are
       // intent, not gospel — e.g. "office365" -> "ms-office365-base").
       const sani = await this.sanitizeForDevice(plan.ir);
+
+      // PRE-FLIGHT: refuse on issues that would silently break the deployment so
+      // the result is never a false "success". (a) a bundled interface whose
+      // aggregate isn't defined fails the push hard; (b) policy referencing zones
+      // that don't exist would all be skipped, leaving an empty rulebase.
+      const aeNames = new Set(
+        sani.ir.interfaces.filter((i) => /^ae\d+$/i.test(i.name)).map((i) => i.name),
+      );
+      const orphan = sani.ir.interfaces.find((i) => i.aggregateGroup && !aeNames.has(i.aggregateGroup));
+      if (orphan) {
+        return {
+          ok: false,
+          committed: false,
+          messages: [
+            `Cannot apply: interface "${orphan.name}" is bundled into "${orphan.aggregateGroup}", which isn't defined. Map the ${orphan.aggregateGroup} bundle to a zone in the Design step, then re-run.`,
+          ],
+        };
+      }
+      if (plan.ir.zones.length === 0 && plan.ir.security.length > 0) {
+        return {
+          ok: false,
+          committed: false,
+          messages: [
+            `Cannot apply: no zones are defined but the plan has ${plan.ir.security.length} security rules — every rule would be skipped, leaving an empty policy. Add zones and map interfaces in the Design step.`,
+          ],
+        };
+      }
+
       sani.notes.forEach((n) => messages.push(n));
+      const skips = sani.notes.filter((n) => /skipped/i.test(n)).length;
+      if (skips) {
+        messages.unshift(
+          `⚠ ${skips} rule(s) were SKIPPED (see below) — usually a zone defined in a pack/import but missing from your Design. Check your zones before committing.`,
+        );
+      }
 
       const allOps = renderPanosElements(sani.ir, dev);
       if (allOps.length === 0) {
@@ -711,11 +779,22 @@ export class PanosDriver implements FirewallDriver {
         }
       };
 
-      // Push-only mode: stage everything, no commit.
+      // Push-only mode: stage everything, no commit. A failed section means the
+      // candidate is INCOMPLETE — report failure (do not pretend it succeeded).
       if (!commit) {
         await genGpCert();
         const f = await push(allOps);
-        if (f) messages.push(`Section not staged — ${f}`);
+        if (f) {
+          return {
+            ok: false,
+            committed: false,
+            messages: [
+              ...messages,
+              `Push failed — ${f}`,
+              "The candidate on the device is INCOMPLETE. Fix the issue above and re-run — do not commit this candidate.",
+            ],
+          };
+        }
         return {
           ok: true,
           committed: false,

@@ -19,6 +19,7 @@ export function PlanStep({ state, patch, onNext, onBack, step, total }: StepProp
   const build = async () => {
     setNote(null);
     setBuilding(true);
+    patch({ validation: null }); // drop any stale validation
     try {
       if (!state.sessionId) throw new ApiError("No session", 0, null);
       // Push the latest design (incl. NGFW + protection toggles) and the enabled
@@ -30,6 +31,14 @@ export function PlanStep({ state, patch, onNext, onBack, step, total }: StepProp
       );
       const result = await api.plan(state.sessionId);
       patch({ plan: result });
+      // Auto-validate so blocking problems (undefined zones, orphan LACP bundles)
+      // surface immediately — the engineer can't skip past them unnoticed.
+      try {
+        const v = await api.validate(state.sessionId);
+        patch({ validation: v });
+      } catch {
+        /* validation is best-effort; the apply path also pre-flights */
+      }
     } catch {
       // Synthesize a readable preview from local state so the engineer still
       // sees what will change even before the planning backend exists.
@@ -69,8 +78,14 @@ export function PlanStep({ state, patch, onNext, onBack, step, total }: StepProp
       intro="A deterministic merge of design, accepted imports and enabled packs into one IR plan. This is the complete what-if diff — read it before anything is applied."
       onBack={onBack}
       onNext={onNext}
-      nextDisabled={!plan}
-      footerNote={plan ? `${plan.totalChanges} change${plan.totalChanges === 1 ? "" : "s"}` : "Build the plan to continue"}
+      nextDisabled={!plan || state.validation?.ok === false}
+      footerNote={
+        state.validation?.ok === false
+          ? "Validation failed — fix the errors above before continuing"
+          : plan
+            ? `${plan.totalChanges} change${plan.totalChanges === 1 ? "" : "s"}`
+            : "Build the plan to continue"
+      }
     >
       <Card>
         <CardHeader
